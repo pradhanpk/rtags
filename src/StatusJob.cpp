@@ -100,13 +100,15 @@ int StatusJob::execute()
         matched = true;
         if (!write(delimiter) || !write("watchedpaths") || !write(delimiter))
             return 1;
-        Set<Path> watched = proj->watchedPaths();
+        Hash<Path, Flags<Project::WatchMode> > watched = proj->watchedPaths();
         if (!write("Indexer"))
             return 1;
-        for (Set<Path>::const_iterator it = watched.begin(); it != watched.end(); ++it) {
-            if (!write<256>("  %s", it->constData()))
+        for (const auto &it : watched) {
+            if (!write<256>("  %s (%s)", it.first.constData(), it.second.toString().constData()))
                 return 1;
         }
+#warning foobar
+#if 0
         if (proj->fileManager) {
             if (!write("FileManager"))
                 return 1;
@@ -118,6 +120,7 @@ int StatusJob::execute()
         }
         if (isAborted())
             return 1;
+#endif
     }
 
     const Dependencies &deps = proj->dependencies();

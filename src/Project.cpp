@@ -302,8 +302,8 @@ bool Project::init()
     const Server::Options &options = Server::instance()->options();
     fileManager.reset(new FileManager);
     if (!(options.options & Server::NoFileSystemWatch)) {
-        mWatcher.modified().connect(std::bind(&Project::onFileModifiedOrAdded, this, std::placeholders::_1));
-        mWatcher.added().connect(std::bind(&Project::onFileModifiedOrAdded, this, std::placeholders::_1));
+        mWatcher.modified().connect(std::bind(&Project::onFileModified, this, std::placeholders::_1));
+        mWatcher.added().connect(std::bind(&Project::onFileAdded, this, std::placeholders::_1));
         mWatcher.removed().connect(std::bind(&Project::onFileRemoved, this, std::placeholders::_1));
     }
     if (!(options.options & Server::NoFileManagerWatch)) {
@@ -340,7 +340,7 @@ bool Project::init()
     loadDependencies(file, mDependencies);
 
     for (const auto &dep : mDependencies) {
-        watch(Location::path(dep.first));
+        watch(Location::path(dep.first), Index);
     }
 
     bool needsSave = false;
@@ -416,7 +416,7 @@ bool Project::init()
             mSources.erase(it++);
             needsSave = true;
         } else {
-            watch(sourceFile);
+            watch(sourceFile, Index);
             ++it;
         }
     }
@@ -799,7 +799,25 @@ void Project::index(const std::shared_ptr<IndexerJob> &job)
     Server::instance()->jobScheduler()->add(job);
 }
 
-void Project::onFileModifiedOrAdded(const Path &file)
+#warning not done
+void Project::onFileAdded(const Path &file)
+{
+    const uint32_t fileId = Location::fileId(file);
+    debug() << file << "was modified or added " << fileId;
+    if (!fileId)
+        return;
+    if (Server::instance()->suspended() || mSuspendedFiles.contains(fileId)) {
+        warning() << file << "is suspended. Ignoring modification";
+        return;
+    }
+    Server::instance()->jobScheduler()->clearHeaderError(fileId);
+    if (mPendingDirtyFiles.insert(fileId)) {
+        mDirtyTimer.restart(DirtyTimeout, Timer::SingleShot);
+    }
+}
+
+#warning not done
+void Project::onFileModified(const Path &file)
 {
     const uint32_t fileId = Location::fileId(file);
     debug() << file << "was modified or added " << fileId;
@@ -936,7 +954,7 @@ void Project::updateDependencies(const std::shared_ptr<IndexDataMessage> &msg)
                 node->includes.clear();
             }
         }
-        watch(Location::path(pair.first));
+        watch(Location::path(pair.first), Index);
     }
 
     // // ### this probably deletes and recreates the same nodes very very often
@@ -1238,18 +1256,23 @@ List<RTags::SortedSymbol> Project::sort(const Set<Symbol> &symbols, Flags<QueryM
     return sorted;
 }
 
-void Project::watch(const Path &file)
+void Project::watch(const Path &file, WatchMode mode)
 {
     Path dir = file.parentDir();
     if (dir.isEmpty()) {
         error() << "Got empty parent dir for" << file;
     } else {
-        if (mWatchedPaths.contains(dir))
+        const auto it = mWatchedPaths.find(dir);
+        if (it != mWatchedPaths.end()) {
+            it->second |= mode;
             return;
+        }
         dir.resolve();
-        if (((Server::instance()->options().options & Server::WatchSystemPaths) || !dir.isSystem())
-            && mWatchedPaths.insert(dir)) {
-            mWatcher.watch(dir);
+        if ((Server::instance()->options().options & Server::WatchSystemPaths) || !dir.isSystem()) {
+            auto &m = mWatchedPaths[dir];
+            if (!m)
+                mWatcher.watch(dir);
+            m |= mode;
         }
     }
 }
@@ -1683,5 +1706,20 @@ error:
     if (err)
         Log(err) << "Error during validation:" << Location::path(fileId) << error << path;
     return false;
+}
+
+void Project::reloadFileManager(ReloadFileManagerMode mode)
+{
+    mLastFileManagerReloadTime = Rct::monoMs();
+    if (mode == Asynchronous) {
+        mScanTimer.restart(5000, Timer::SingleShot);
+    } else {
+        const Set<Path> paths = ScanThread::paths(project->path());
+        onRecurseJobFinished(paths);
+    }
+
+    if (mode == Synchronous) {
+
+    }
 }
 
