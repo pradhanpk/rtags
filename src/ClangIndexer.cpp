@@ -1061,21 +1061,29 @@ bool ClangIndexer::handleCursor(const CXCursor &cursor, CXCursorKind kind, const
         if (kind == CXCursor_VarDecl) {
             bool isAuto;
             const CXCursor typeRef = RTags::resolveAutoTypeRef(cursor, &isAuto);
-            if (isAuto)
+            if (isAuto) {
                 c.flags |= Symbol::Auto;
+            }
             if (!clang_equalCursors(typeRef, nullCursor)) {
-                // const CXSourceRange range = clang_Cursor_getSpellingNameRange(mLastCursor, 0, 0);
-                // error() << "Found" << typeRef << "for" << cursor << mLastCursor
-                //         << createLocation(mLastCursor)
-                //         << clang_Range_isNull(range)
-                //         << createLocation(clang_getCursorLocation(mLastCursor));
+                const CXSourceRange range = clang_Cursor_getSpellingNameRange(mLastCursor, 0, 0);
+                error() << "Found" << typeRef << "for" << cursor << mLastCursor
+                        << createLocation(mLastCursor)
+                        << clang_Range_isNull(range)
+                        << createLocation(clang_getCursorLocation(mLastCursor));
                 Symbol *cursorPtr = 0;
                 const CXCursorKind typeRefKind = clang_getCursorKind(typeRef);
                 if (!clang_isInvalid(typeRefKind)) {
-                    setType(c, clang_getCursorType(typeRef));
-                    const Location loc = createLocation(clang_getCursorLocation(mLastCursor));
-                    if (loc.fileId() && handleReference(mLastCursor, CXCursor_TypeRef, loc,
-                                                        clang_getCursorReferenced(typeRef), nullCursor, &cursorPtr)) {
+                    if (clang_isReference(typeRefKind)) {
+                        setType(c, clang_getCursorType(clang_getCursorReferenced(typeRef)));
+                    } else {
+                        setType(c, clang_getCursorType(typeRef));
+                    }
+                    error() << "and type" << c.typeName;
+                    bool blocked;
+                    const Location loc = createLocation(clang_getCursorLocation(mLastCursor), &blocked);
+                    if (!blocked && loc.fileId()
+                        && handleReference(mLastCursor, CXCursor_TypeRef, loc,
+                                           clang_getCursorReferenced(typeRef), nullCursor, &cursorPtr)) {
                         // the type is read from the cursor passed in and that won't
                         // be correct in this case
                         cursorPtr->symbolLength = 4;
@@ -1092,6 +1100,7 @@ bool ClangIndexer::handleCursor(const CXCursor &cursor, CXCursorKind kind, const
         }
 
         c.symbolName = addNamePermutations(cursor, location, typeOverride, RTags::Type_Cursor);
+        error() << location << 1 << c.symbolName << 2 << c.typeName << 3 << typeOverride;
     }
 
     const CXSourceRange range = clang_getCursorExtent(cursor);
@@ -1125,7 +1134,10 @@ bool ClangIndexer::handleCursor(const CXCursor &cursor, CXCursorKind kind, const
     }
 
 #if CINDEX_VERSION >= CINDEX_VERSION_ENCODE(0, 16)
-    if (!(c.flags & (Symbol::Auto|Symbol::AutoRef)) && c.type != CXType_LValueReference && c.type != CXType_RValueReference) {
+    if (!(c.flags & (Symbol::Auto|Symbol::AutoRef))
+        && c.type != CXType_LValueReference
+        && c.type != CXType_RValueReference
+        && c.type != CXType_Unexposed) {
         c.size = clang_Type_getSizeOf(type);
         c.alignment = std::max<int16_t>(-1, clang_Type_getAlignOf(type));
     }
@@ -1247,6 +1259,7 @@ bool ClangIndexer::writeFiles(const Path &root, String &error)
                       << unit.second->usrs.size()
                       << unit.second->symbolNames.size()
                       << unit.second->symbols.size();
+            ::error() << unit.second->targets.keys();
             continue;
         }
         assert(mIndexDataMessage.files().value(unit.first) & IndexDataMessage::Visited);

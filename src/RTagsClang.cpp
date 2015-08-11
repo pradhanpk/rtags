@@ -235,10 +235,11 @@ static CXChildVisitResult resolveAutoTypeRefVisitor(CXCursor cursor, CXCursor, C
         case CXCursor_TemplateTemplateParameter:
         case CXCursor_FunctionDecl:
         case CXCursor_Constructor: {
-            if (userData->ok) {
-                userData->ok = false;
-                return CXChildVisit_Break;
-            }
+            // if (userData->ok) {
+            //     l() << "already ok breaking" << ref;
+            //     userData->ok = false;
+            //     return CXChildVisit_Break;
+            // }
             l() << "Recursing for ref" << ref;
             userData->ok = true;
             ResolveAutoTypeRefUserData u = { userData->orig, clang_getNullCursor(), 0, true, userData->seen };
@@ -274,21 +275,24 @@ static CXChildVisitResult resolveAutoTypeRefVisitor(CXCursor cursor, CXCursor, C
 
 CXCursor resolveAutoTypeRef(const CXCursor &cursor, bool *isAuto)
 {
+    if (isAuto)
+        *isAuto = false;
     CXType type = clang_getCursorType(cursor);
     while (type.kind == CXType_Pointer)
         type = clang_getPointeeType(type);
     if (type.kind == CXType_Unexposed) {
-        if (isAuto)
-            *isAuto = true;
-        l() << "resolving" << cursor << clang_getCursorType(cursor).kind;
-        assert(clang_getCursorKind(cursor) == CXCursor_VarDecl);
-        Hash<CXCursor, bool> seen;
-        ResolveAutoTypeRefUserData userData = { cursor, clang_getNullCursor(), 0, false, &seen }; //, List<CXCursorKind>() };
-        clang_visitChildren(cursor, resolveAutoTypeRefVisitor, &userData);
-        if (userData.ok)
-            return userData.ref;
-    } else if (isAuto) {
-        *isAuto = false;
+        const CXStringScope spelling = clang_getTypeSpelling(type);
+        if (!strcmp(clang_getCString(spelling), "auto")) {
+            if (isAuto)
+                *isAuto = true;
+            l() << "resolving" << cursor << clang_getCursorType(cursor).kind;
+            assert(clang_getCursorKind(cursor) == CXCursor_VarDecl);
+            Hash<CXCursor, bool> seen;
+            ResolveAutoTypeRefUserData userData = { cursor, clang_getNullCursor(), 0, false, &seen }; //, List<CXCursorKind>() };
+            clang_visitChildren(cursor, resolveAutoTypeRefVisitor, &userData);
+            if (userData.ok)
+                return userData.ref;
+        }
     }
     return clang_getNullCursor();
 }
