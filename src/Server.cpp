@@ -1301,6 +1301,7 @@ void Server::sources(const std::shared_ptr<QueryMessage> &query, const std::shar
     const Path path = query->query();
     const bool flagsOnly = query->flags() & QueryMessage::CompilationFlagsOnly;
     const bool splitLine = query->flags() & QueryMessage::CompilationFlagsSplitLine;
+    const bool excludeDefault = query->flags() & QueryMessage::ExcludeDefaultArguments;
     if (path.isFile()) {
         std::shared_ptr<Project> project = projectForQuery(query);
         if (project) {
@@ -1331,10 +1332,14 @@ void Server::sources(const std::shared_ptr<QueryMessage> &query, const std::shar
         for (const auto &it : infos) {
             if (match.isEmpty() || match.match(it.second.sourceFile())) {
                 if (flagsOnly) {
+                    Flags<Source::CommandLineFlag> flags = Source::Default|Source::IncludeCompiler;
+                    if (excludeDefault)
+                        flags |= Source::ExcludeDefaultArguments;
+                    printf("CALLING SHIT %s\n", flags.toString().constData());
                     conn->write<128>("%s%s%s",
                                      it.second.sourceFile().constData(),
                                      splitLine ? "\n" : ": ",
-                                     String::join(it.second.toCommandLine(), splitLine ? '\n' : ' ').constData());
+                                     String::join(it.second.toCommandLine(flags), splitLine ? '\n' : ' ').constData());
                 } else {
                     conn->write(it.second.toString());
                 }

@@ -141,6 +141,7 @@ struct Option opts[] = {
     { RClient::BuildIndex, "build-index", 0, required_argument, "For sources with multiple builds, use the arg'th." },
     { RClient::CompilationFlagsOnly, "compilation-flags-only", 0, no_argument, "For --source, only print compilation flags." },
     { RClient::CompilationFlagsSplitLine, "compilation-flags-split-line", 0, no_argument, "For --source, print one compilation flag per line." },
+    { RClient::ExcludeDefaultArguments, "exclude-default-arguments", 0, no_argument, "For --source, exclude rtags default arguments." },
     { RClient::DumpIncludeHeaders, "dump-include-headers", 0, no_argument, "For --dump-file, also dump dependencies." },
     { RClient::SilentQuery, "silent-query", 0, no_argument, "Don't log this request in rdm." },
     { RClient::SynchronousCompletions, "synchronous-completions", 0, no_argument, "Wait for completion results." },
@@ -565,6 +566,9 @@ RClient::ParseStatus RClient::parse(int &argc, char **argv)
             break;
         case CompilationFlagsOnly:
             mQueryFlags |= QueryMessage::CompilationFlagsOnly;
+            break;
+        case ExcludeDefaultArguments:
+            mQueryFlags |= QueryMessage::ExcludeDefaultArguments;
             break;
         case NoColor:
             mQueryFlags |= QueryMessage::NoColor;

@@ -2184,6 +2184,24 @@ definition."
             (message (buffer-substring-no-properties (point-min) (1- (point-max))))
           (message (buffer-string)))))))
 
+;;;###autoload
+(defun rtags-compile-file (&optional buffer)
+  (interactive)
+  (let ((source (cond ((stringp buffer) buffer)
+                      ((bufferp buffer) (buffer-file-name buffer))
+                      (t (buffer-file-name)))))
+    (with-temp-buffer
+      (rtags-call-rc :path source "--sources" source "--exclude-default-arguments" "--compilation-flags-only")
+      ;; (goto-char (point-min))
+      ;; (while (re-search-forward " Build: " nil t)
+      ;;   (delete-region (match-beginning 0) (point-at-eol)))
+      (let* ((lines (split-string (buffer-string) "\n"))
+             (line (car lines)))
+        (when (> (length lines) 0)
+          (setq line (completing-read "Choose build: " lines)))
+        (when line
+          (compile line))))))
+
 (defvar rtags-rdm-includes nil)
 (defun rtags-dummy-includes-func()
   "Dummy function, returns rtags-rdm-includes."

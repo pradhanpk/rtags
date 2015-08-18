@@ -56,6 +56,7 @@ public:
         DumpFile,
         DumpIncludeHeaders,
         ElispList,
+        ExcludeDefaultArguments,
         FilterSystemHeaders,
         FindFile,
         FindFilePreferExact,
