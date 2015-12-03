@@ -14,8 +14,10 @@ You should have received a copy of the GNU General Public License
 along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
 #include "CompilerManager.h"
-#include <rct/Process.h>
-#include <rct/Log.h>
+
+#include "rct/Log.h"
+#include "rct/Process.h"
+#include "Source.h"
 
 static std::mutex sMutex;
 struct Compiler {

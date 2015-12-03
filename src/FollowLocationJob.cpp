@@ -14,9 +14,11 @@ You should have received a copy of the GNU General Public License
 along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
 #include "FollowLocationJob.h"
+
+#include "Project.h"
+#include "rct/SignalSlot.h"
 #include "RTags.h"
 #include "Server.h"
-#include "Project.h"
 
 FollowLocationJob::FollowLocationJob(const Location &loc,
                                      const std::shared_ptr<QueryMessage> &query,
@@ -34,7 +36,7 @@ int FollowLocationJob::execute()
     if (queryFlags() & QueryMessage::AllTargets) {
         const Set<String> usrs = project()->findTargetUsrs(location);
         for (const String &usr : usrs) {
-            for (const Symbol &s : project()->findByUsr(usr, location.fileId(), Project::ArgDependsOn)) {
+            for (const Symbol &s : project()->findByUsr(usr, location.fileId(), Project::ArgDependsOn, location)) {
                 write(s.toString());
             }
         }

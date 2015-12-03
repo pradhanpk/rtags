@@ -14,26 +14,27 @@ You should have received a copy of the GNU General Public License
 along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
 #include "DependenciesJob.h"
-#include "RTags.h"
-#include "Server.h"
+
 #include "FileManager.h"
 #include "Project.h"
+#include "QueryMessage.h"
+#include "RTags.h"
+#include "Server.h"
 
 DependenciesJob::DependenciesJob(const std::shared_ptr<QueryMessage> &query, const std::shared_ptr<Project> &project)
     : QueryJob(query, project, QuietJob)
 {
-    Path p = query->query();
-    p.resolve();
-    mFileId = Location::fileId(p);
+    Deserializer deserializer(query->query());
+    Path path;
+    deserializer >> path >> mArgs;
+    mFileId = Location::fileId(path);
 }
 
 int DependenciesJob::execute()
 {
-    if (!mFileId)
-        return 1;
     std::shared_ptr<Project> proj = project();
     if (!proj)
         return 2;
-    write(proj->dumpDependencies(mFileId));
+    write(proj->dumpDependencies(mFileId, mArgs, queryFlags()));
     return 0;
 }

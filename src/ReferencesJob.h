@@ -16,11 +16,9 @@ along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 #ifndef ReferencesJob_h
 #define ReferencesJob_h
 
-#include <rct/String.h>
-#include "QueryJob.h"
-#include <rct/List.h>
 #include "Location.h"
-#include "RTags.h"
+#include "QueryJob.h"
+#include "rct/String.h"
 
 class SymbolInfo;
 class ReferencesJob : public QueryJob

@@ -16,8 +16,6 @@
 #ifndef VisitFileMessage_h
 #define VisitFileMessage_h
 
-#include <rct/Message.h>
-#include <rct/String.h>
 #include "RTagsMessage.h"
 
 class VisitFileMessage : public RTagsMessage

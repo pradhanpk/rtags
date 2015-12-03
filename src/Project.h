@@ -16,28 +16,28 @@
 #ifndef Project_h
 #define Project_h
 
-#include "IndexerJob.h"
-#include "Match.h"
-#include "QueryMessage.h"
-#include "RTags.h"
-#include "RTagsClang.h"
 #include <cstdint>
-#include <memory>
 #include <mutex>
-#include <rct/FileSystemWatcher.h>
-#include <rct/EmbeddedLinkedList.h>
-#include <rct/LinkedList.h>
-#include <rct/Path.h>
-#include <regex>
-#include <rct/Timer.h>
-#include <rct/Flags.h>
 
-class IndexDataMessage;
-class FileManager;
-class IndexerJob;
-class RestoreThread;
+#include "Diagnostic.h"
+#include "FileMap.h"
+#include "IndexerJob.h"
+#include "IndexMessage.h"
+#include "QueryMessage.h"
+#include "rct/EmbeddedLinkedList.h"
+#include "rct/FileSystemWatcher.h"
+#include "rct/Flags.h"
+#include "rct/Path.h"
+#include "rct/StopWatch.h"
+#include "rct/Timer.h"
+#include "RTags.h"
+
 class Connection;
 class Dirty;
+class FileManager;
+class IndexDataMessage;
+class Match;
+class RestoreThread;
 struct DependencyNode
 {
     DependencyNode(uint32_t f)
@@ -65,6 +65,9 @@ public:
     std::shared_ptr<FileManager> fileManager() const { return mFileManager; }
 
     Path path() const { return mPath; }
+    void setCompilationDatabaseInfo(const Path &dir,
+                                    const List<Path> &pathEnvironment,
+                                    Flags<IndexMessage::Flag> flags);
 
     bool match(const Match &match, bool *indexed = 0) const;
 
@@ -115,10 +118,11 @@ public:
     };
 
     Set<uint32_t> dependencies(uint32_t fileId, DependencyMode mode) const;
-    String dumpDependencies(uint32_t fileId) const;
+    bool dependsOn(uint32_t source, uint32_t header) const;
+    String dumpDependencies(uint32_t fileId,
+                            const List<String> &args = List<String>(),
+                            Flags<QueryMessage::Flag> flags = Flags<QueryMessage::Flag>()) const;
     const Hash<uint32_t, DependencyNode*> &dependencies() const { return mDependencies; }
-    const Declarations &declarations() const { return mDeclarations; }
-    bool isDeclaration(const String &usr) const { return mDeclarations.contains(usr); }
 
     static bool readSources(const Path &path, Sources &sources, String *error);
     enum SymbolMatchType {
@@ -150,7 +154,7 @@ public:
     Set<String> findTargetUsrs(const Location &loc);
     Set<Symbol> findSubclasses(const Symbol &symbol);
 
-    Set<Symbol> findByUsr(const String &usr, uint32_t fileId, DependencyMode mode);
+    Set<Symbol> findByUsr(const String &usr, uint32_t fileId, DependencyMode mode, const Location &filtered = Location());
 
     Path sourceFilePath(uint32_t fileId, const char *path = "") const;
 
@@ -183,12 +187,14 @@ public:
     String toCompilationDatabase() const;
     enum WatchMode {
         Watch_FileManager = 0x1,
-        Watch_SourceFile = 0x2
+        Watch_SourceFile = 0x2,
+        Watch_Dependency = 0x4,
+        Watch_CompilationDatabase = 0x8
     };
 
     void watch(const Path &dir, WatchMode mode);
     void unwatch(const Path &dir, WatchMode mode);
-    void clearWatch(WatchMode mode);
+    void clearWatch(Flags<WatchMode> mode);
     Hash<Path, Flags<WatchMode> > watchedPaths() const { return mWatchedPaths; }
 
     bool isIndexing() const { return !mActiveJobs.isEmpty(); }
@@ -212,15 +218,22 @@ public:
     void dirty(uint32_t fileId);
     bool save();
     void prepare(uint32_t fileId);
+    String estimateMemory() const;
+    void diagnose(uint32_t fileId);
+    void diagnoseAll();
+    uint32_t fileMapOptions() const;
+    void fixPCH(Source &source);
 private:
+    void reloadCompilationDatabase();
+    void removeSource(Sources::iterator it);
     void onFileAddedOrModified(const Path &path);
     void watchFile(uint32_t fileId);
     bool validate(uint32_t fileId, String *error = 0) const;
     void removeDependencies(uint32_t fileId);
     void updateDependencies(const std::shared_ptr<IndexDataMessage> &msg);
-    void updateDeclarations(const Set<uint32_t> &visited, Declarations &declarations);
     void loadFailed(uint32_t fileId);
     void updateFixIts(const Set<uint32_t> &visited, FixIts &fixIts);
+    Diagnostics updateDiagnostics(const Diagnostics &diagnostics);
     int startDirtyJobs(Dirty *dirty,
                        const UnsavedFiles &unsavedFiles = UnsavedFiles(),
                        const std::shared_ptr<Connection> &wait = std::shared_ptr<Connection>());
@@ -228,8 +241,12 @@ private:
 
     struct FileMapScope {
         FileMapScope(const std::shared_ptr<Project> &proj, int m)
-            : project(proj), openedFiles(0), max(m)
+            : project(proj), openedFiles(0), totalOpened(0), max(m)
         {}
+        ~FileMapScope()
+        {
+            warning() << "Query opened" << totalOpened << "files for project" << project->path();
+        }
 
         struct LRUKey {
             FileMapType type;
@@ -270,7 +287,8 @@ private:
             const Path path = project->sourceFilePath(fileId, Project::fileMapName(type));
             std::shared_ptr<FileMap<Key, Value> > fileMap(new FileMap<Key, Value>);
             String err;
-            if (fileMap->load(path, &err)) {
+            if (fileMap->load(path, project->fileMapOptions(), &err)) {
+                ++totalOpened;
                 cache[fileId] = fileMap;
                 std::shared_ptr<LRUEntry> entry(new LRUEntry(type, fileId));
                 entryList.append(entry);
@@ -316,7 +334,7 @@ private:
         Hash<uint32_t, std::shared_ptr<FileMap<Location, Symbol> > > symbols;
         Hash<uint32_t, std::shared_ptr<FileMap<String, Set<Location> > > > targets, usrs;
         std::shared_ptr<Project> project;
-        int openedFiles;
+        int openedFiles, totalOpened;
         const int max;
 
         EmbeddedLinkedList<std::shared_ptr<LRUEntry> > entryList;
@@ -326,6 +344,12 @@ private:
     std::shared_ptr<FileMapScope> mFileMapScope;
 
     const Path mPath, mSourceFilePathBase;
+    struct CompilationDataBaseInfo {
+        Path dir;
+        uint64_t lastModified;
+        List<Path> pathEnvironment;
+        Flags<IndexMessage::Flag> indexFlags;
+    } mCompilationDatabaseInfo;
     Path mProjectFilePath, mSourcesFilePath;
 
     Files mFiles;
@@ -333,7 +357,7 @@ private:
     Hash<uint32_t, Path> mVisitedFiles;
     int mJobCounter, mJobsStarted;
 
-    Set<uint32_t> mHadDiagnostics;
+    Diagnostics mDiagnostics;
 
     // key'ed on Source::key()
     Hash<uint64_t, std::shared_ptr<IndexerJob> > mActiveJobs;
@@ -343,8 +367,8 @@ private:
 
     StopWatch mTimer;
     FileSystemWatcher mWatcher;
-    Declarations mDeclarations;
     Sources mSources;
+    Set<uint64_t> *mMarkSources;
     Hash<Path, Flags<WatchMode> > mWatchedPaths;
     std::shared_ptr<FileManager> mFileManager;
     FixIts mFixIts;

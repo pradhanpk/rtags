@@ -14,10 +14,11 @@ You should have received a copy of the GNU General Public License
 along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
 #include "SymbolInfoJob.h"
-#include "RTags.h"
-#include "Server.h"
+
 #include "Project.h"
 #include "QueryMessage.h"
+#include "RTags.h"
+#include "Server.h"
 
 SymbolInfoJob::SymbolInfoJob(const Location &loc, const std::shared_ptr<QueryMessage> &query, const std::shared_ptr<Project> &proj)
     : QueryJob(query, proj), location(loc)
@@ -36,25 +37,27 @@ int SymbolInfoJob::execute()
     int idx = -1;
     auto symbol = project()->findSymbol(location, &idx);
     if (!symbol.isNull()) {
-        write(symbol.location);
-        write(symbol, toStringFlags);
+        if (queryFlags() & QueryMessage::Elisp) {
+            write(symbol);
+        } else {
+            write(symbol.location);
+            write(symbol, toStringFlags);
+        }
         ret = 0;
     }
     if (queryFlags() & QueryMessage::SymbolInfoIncludeParents) {
         auto syms = project()->openSymbols(location.fileId());
         if (syms) {
+            idx = syms->lowerBound(location);
             if (idx == -1) {
-                idx = syms->lowerBound(location);
-                if (idx == -1) {
-                    idx = syms->count() - 1;
-                }
+                idx = syms->count() - 1;
             }
         }
         toStringFlags |= Symbol::IgnoreTargets|Symbol::IgnoreReferences;
         const unsigned int line = location.line();
         const unsigned int column = location.column();
         while (idx-- > 0) {
-            const Symbol symbol = syms->valueAt(idx);
+            symbol = syms->valueAt(idx);
             if (symbol.isDefinition()
                 && symbol.isContainer()
                 && comparePosition(line, column, symbol.startLine, symbol.startColumn) >= 0

@@ -17,7 +17,6 @@ along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 #define OutputMessage_h
 
 #include "RTagsMessage.h"
-#include <rct/String.h>
 
 class LogOutputMessage : public RTagsMessage
 {

@@ -27,12 +27,7 @@
 (require 'auto-complete)
 (require 'rtags)
 
-(defconst rtags-location-regx
-  (rx (group (zero-or-more (not (any ":"))))
-      ":"
-      (group (zero-or-more digit))
-      ":"
-      (group (zero-or-more digit))))
+(defconst rtags-location-regx "\\([^:]*\\):\\([0-9]*\\):\\([0-9]*\\)")
 
 (defcustom rtags-ac-expand-functions t
   "Whether to expand function parameter lists in auto-complete mode"
@@ -106,12 +101,9 @@
   ;; grab only inside the func arg list: int func( int x, int y )
   ;;                                              ^............^
   (let* ((tag (replace-regexp-in-string
-               (rx (zero-or-more any) "(") ""
-               (replace-regexp-in-string (rx ")" (zero-or-more any)) "" origtag)))
+               ".*(" "" (replace-regexp-in-string ").*" "" origtag)))
          (arglist (mapcar #'rtags-ac-trim-leading-trailing-whitespace
-                          (split-string tag
-                                        (rx (or ","))
-                                        t)))
+                          (split-string tag "," t)))
          insertfunc inserttxt)
 
     ;; for yasnippet, wrap each elem in arg list with ${}

@@ -14,19 +14,21 @@
    along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
 #include "RClient.h"
-#include "IndexMessage.h"
-#include "LogOutputMessage.h"
-#include "RTagsLogOutput.h"
-#include <rct/Connection.h>
-#include <rct/EventLoop.h>
-#include <rct/Log.h>
-#include <rct/QuitMessage.h>
-#include <rct/Rct.h>
-#include "RTagsClang.h"
-#include "FileMap.h"
-#include <rct/StopWatch.h>
+
 #include <stdio.h>
 #include <sys/ioctl.h>
+
+#include "FileMap.h"
+#include "IndexMessage.h"
+#include "LogOutputMessage.h"
+#include "rct/Connection.h"
+#include "rct/EventLoop.h"
+#include "rct/Log.h"
+#include "rct/QuitMessage.h"
+#include "rct/Rct.h"
+#include "rct/StopWatch.h"
+#include "RTags.h"
+#include "RTagsLogOutput.h"
 
 struct Option {
     const RClient::OptionType option;
@@ -57,7 +59,7 @@ struct Option opts[] = {
     { RClient::Clear, "clear", 'C', no_argument, "Clear projects." },
     { RClient::Project, "project", 'w', optional_argument, "With arg, select project matching that if unique, otherwise list all projects." },
     { RClient::DeleteProject, "delete-project", 'W', required_argument, "Delete all projects matching regex." },
-    { RClient::JobCount, "jobcount", 'j', optional_argument, "Set or query current job count. (Prefix with l to set low-priority-job-count)." },
+    { RClient::JobCount, "job-count", 'j', optional_argument, "Set or query current job count. (Prefix with l to set low-priority-job-count)." },
 
     { RClient::None, 0, 0, 0, "" },
     { RClient::None, 0, 0, 0, "Indexing commands:" },
@@ -77,6 +79,7 @@ struct Option opts[] = {
     { RClient::FindSymbols, "find-symbols", 'F', optional_argument, "Find symbols matching arg." },
     { RClient::SymbolInfo, "symbol-info", 'U', required_argument, "Get cursor info for this location." },
     { RClient::Status, "status", 's', optional_argument, "Dump status of rdm. Arg can be symbols or symbolNames." },
+    { RClient::Diagnose, "diagnose", 0, required_argument, "Resend diagnostics for file." },
     { RClient::IsIndexed, "is-indexed", 'T', required_argument, "Check if rtags knows about, and is ready to return information about, this source file." },
     { RClient::IsIndexing, "is-indexing", 0, no_argument, "Check if rtags is currently indexing files." },
     { RClient::HasFileManager, "has-filemanager", 0, optional_argument, "Check if rtags has info about files in this directory." },
@@ -84,7 +87,9 @@ struct Option opts[] = {
     { RClient::Reindex, "reindex", 'V', optional_argument, "Reindex all files or all files matching pattern." },
     { RClient::CheckReindex, "check-reindex", 'x', optional_argument, "Check if reindexing is necessary for all files matching pattern." },
     { RClient::FindFile, "path", 'P', optional_argument, "Print files matching pattern." },
+    { RClient::CurrentProject, "current-project", 0, no_argument, "Print path for current project." },
     { RClient::DumpFile, "dump-file", 'd', required_argument, "Dump source file." },
+    { RClient::CheckIncludes, "check-includes", 0, required_argument, "Check includes for source file." },
     { RClient::DumpFileMaps, "dump-file-maps", 0, required_argument, "Dump file maps for file." },
     { RClient::GenerateTest, "generate-test", 0, required_argument, "Generate a test for a given source file." },
     { RClient::RdmLog, "rdm-log", 'g', no_argument, "Receive logs from rdm." },
@@ -94,7 +99,8 @@ struct Option opts[] = {
     { RClient::FindProjectBuildRoot, "find-project-build-root", 0, required_argument, "Use to check behavior of find-project-root for builds." },
     { RClient::IncludeFile, "include-file", 0, required_argument, "Use to generate include statement for symbol." },
     { RClient::Sources, "sources", 0, optional_argument, "Dump sources for source file." },
-    { RClient::Dependencies, "dependencies", 0, required_argument, "Dump dependencies for source file." },
+    { RClient::Dependencies, "dependencies", 0, required_argument, "Dump dependencies for source file [(includes, included-by, depends-on, depended-on, tree-depends-on, raw)]." },
+    { RClient::AllDependencies, "all-dependencies", 0, no_argument, "Dump dependencies for all source files [(includes, included-by, depends-on, depended-on, tree-depends-on, raw)]." },
     { RClient::ReloadFileManager, "reload-file-manager", 'B', no_argument, "Reload file manager." },
     { RClient::Man, "man", 0, no_argument, "Output XML for xmltoman to generate man page for rc :-)" },
     { RClient::CodeCompleteAt, "code-complete-at", 'l', required_argument, "Code complete at location: arg is file:line:col." },
@@ -105,6 +111,7 @@ struct Option opts[] = {
     { RClient::SetBuffers, "set-buffers", 0, optional_argument, "Set active buffers (list of filenames for active buffers in editor)." },
     { RClient::ListBuffers, "list-buffers", 0, no_argument, "List active buffers." },
     { RClient::ClassHierarchy, "class-hierarchy", 0, required_argument, "Dump class hierarcy for struct/class at location." },
+    { RClient::DebugLocations, "debug-locations", 0, optional_argument, "Manipulate debug locations." },
 
     { RClient::None, 0, 0, 0, "" },
     { RClient::None, 0, 0, 0, "Command flags:" },
@@ -116,17 +123,18 @@ struct Option opts[] = {
     { RClient::LogFile, "log-file", 'L', required_argument, "Log to this file." },
     { RClient::NoContext, "no-context", 'N', no_argument, "Don't print context for locations." },
     { RClient::PathFilter, "path-filter", 'i', required_argument, "Filter out results not matching with arg." },
+    { RClient::DependencyFilter, "dependency-filter", 0, required_argument, "Filter out results unless argument depends on them." },
     { RClient::RangeFilter, "range-filter", 0, required_argument, "Filter out results not in the specified range." },
     { RClient::FilterSystemHeaders, "filter-system-headers", 'H', no_argument, "Don't exempt system headers from path filters." },
     { RClient::AllReferences, "all-references", 'e', no_argument, "Include definitions/declarations/constructors/destructors for references. Used for rename symbol." },
     { RClient::AllTargets, "all-targets", 0, no_argument, "Print all targets for -f. Used for debugging." },
-    { RClient::ElispList, "elisp-list", 'Y', no_argument, "Output elisp: (list \"one\" \"two\" ...)." },
-    { RClient::Diagnostics, "diagnostics", 'G', no_argument, "Receive continual diagnostics from rdm." },
-    { RClient::XmlDiagnostics, "xml-diagnostics", 'm', no_argument, "Receive continual XML formatted diagnostics from rdm." },
+    { RClient::Elisp, "elisp", 'Y', no_argument, "Output elisp: (list \"one\" \"two\" ...)." },
+    { RClient::Diagnostics, "diagnostics", 'm', no_argument, "Receive async formatted diagnostics from rdm." },
     { RClient::MatchRegex, "match-regexp", 'Z', no_argument, "Treat various text patterns as regexps (-P, -i, -V)." },
     { RClient::MatchCaseInsensitive, "match-icase", 'I', no_argument, "Match case insensitively" },
     { RClient::AbsolutePath, "absolute-path", 'K', no_argument, "Print files with absolute path." },
     { RClient::SocketFile, "socket-file", 'n', required_argument, "Use this socket file (default ~/.rdm)." },
+    { RClient::SocketAddress, "socket-address", 0, required_argument, "Use this host:port combination (instead of --socket-file)." },
     { RClient::Timeout, "timeout", 'y', required_argument, "Max time in ms to wait for job to finish (default no timeout)." },
     { RClient::FindVirtuals, "find-virtuals", 'k', no_argument, "Use in combinations with -R or -r to show other implementations of this function." },
     { RClient::FindFilePreferExact, "find-file-prefer-exact", 'A', no_argument, "Use to make --find-file prefer exact matches over partial matches." },
@@ -141,14 +149,13 @@ struct Option opts[] = {
     { RClient::KindFilter, "kind-filter", 0, required_argument, "Only return results matching this kind.", },
     { RClient::IMenu, "imenu", 0, no_argument, "Use with --list-symbols to provide output for (rtags-imenu) (filter namespaces, fully qualified function names, ignore certain symbols etc)." },
     { RClient::ContainingFunction, "containing-function", 'o', no_argument, "Include name of containing function in output."},
+    { RClient::ContainingFunctionLocation, "containing-function-location", 0, no_argument, "Include location of containing function in output."},
     { RClient::BuildIndex, "build-index", 0, required_argument, "For sources with multiple builds, use the arg'th." },
     { RClient::CompilationFlagsOnly, "compilation-flags-only", 0, no_argument, "For --source, only print compilation flags." },
     { RClient::CompilationFlagsSplitLine, "compilation-flags-split-line", 0, no_argument, "For --source, print one compilation flag per line." },
     { RClient::DumpIncludeHeaders, "dump-include-headers", 0, no_argument, "For --dump-file, also dump dependencies." },
     { RClient::SilentQuery, "silent-query", 0, no_argument, "Don't log this request in rdm." },
     { RClient::SynchronousCompletions, "synchronous-completions", 0, no_argument, "Wait for completion results." },
-    { RClient::UnescapeCompileCommands, "unescape-compile-commands", 0, no_argument, "Unescape \\'s and unquote arguments to -c." },
-    { RClient::NoUnescapeCompileCommands, "no-unescape-compile-commands", 0, no_argument, "Escape \\'s and unquote arguments to -c." },
     { RClient::NoSortReferencesByInput, "no-sort-references-by-input", 0, no_argument, "Don't sort references by input position." },
     { RClient::ProjectRoot, "project-root", 0, required_argument, "Override project root for compile commands." },
     { RClient::RTagsConfig, "rtags-config", 0, required_argument, "Print out .rtags-config for argument." },
@@ -312,8 +319,8 @@ public:
     virtual bool exec(RClient *rc, const std::shared_ptr<Connection> &connection) override
     {
         unsigned int flags = RTagsLogOutput::None;
-        if (rc->queryFlags() & QueryMessage::ElispList)
-            flags |= RTagsLogOutput::ElispList;
+        if (rc->queryFlags() & QueryMessage::Elisp)
+            flags |= RTagsLogOutput::Elisp;
         const LogLevel level = mLevel == Default ? rc->logLevel() : mLevel;
         LogOutputMessage msg(level, flags);
         msg.init(rc->argc(), rc->argv());
@@ -332,35 +339,21 @@ const LogLevel RdmLogCommand::Default(-1);
 class CompileCommand : public RCCommand
 {
 public:
-    CompileCommand(const Path &c, const String &a, RClient::EscapeMode e)
-        : RCCommand(), cwd(c), args(a), escapeMode(e)
+    CompileCommand(const Path &c, const String &a)
+        : RCCommand(), cwd(c), args(a)
     {}
-    CompileCommand(const Path &dir, RClient::EscapeMode e)
-        : RCCommand(), compilationDatabaseDir(dir), escapeMode(e)
+    CompileCommand(const Path &dir)
+        : RCCommand(), compilationDatabaseDir(dir)
     {}
 
     const Path compilationDatabaseDir;
     const Path cwd;
     const String args;
-    const RClient::EscapeMode escapeMode;
     virtual bool exec(RClient *rc, const std::shared_ptr<Connection> &connection) override
     {
-        bool escape = false;
-        switch (rc->mEscapeMode) {
-        case RClient::Escape_Auto:
-            escape = (escapeMode == RClient::Escape_Do);
-            break;
-        case RClient::Escape_Do:
-            escape = true;
-            break;
-        case RClient::Escape_Dont:
-            escape = false;
-            break;
-        }
         IndexMessage msg;
         msg.init(rc->argc(), rc->argv());
         msg.setWorkingDirectory(cwd);
-        msg.setFlag(IndexMessage::Escape, escape);
         msg.setFlag(IndexMessage::GuessFlags, rc->mGuessFlags);
         msg.setArguments(args);
         msg.setCompilationDatabaseDir(compilationDatabaseDir);
@@ -379,8 +372,8 @@ public:
 RClient::RClient()
     : mMax(-1), mTimeout(-1), mMinOffset(-1), mMaxOffset(-1),
       mConnectTimeout(DEFAULT_CONNECT_TIMEOUT), mBuildIndex(0),
-      mLogLevel(LogLevel::Error), mEscapeMode(Escape_Auto),
-      mGuessFlags(false), mTerminalWidth(-1), mArgc(0), mArgv(0)
+      mLogLevel(LogLevel::Error), mTcpPort(0), mGuessFlags(false),
+      mTerminalWidth(-1), mArgc(0), mArgv(0)
 {
     struct winsize w;
     ioctl(0, TIOCGWINSZ, &w);
@@ -412,14 +405,14 @@ void RClient::addLog(LogLevel level)
     mCommands.append(std::shared_ptr<RCCommand>(new RdmLogCommand(level)));
 }
 
-void RClient::addCompile(const Path &cwd, const String &args, EscapeMode mode)
+void RClient::addCompile(const Path &cwd, const String &args)
 {
-    mCommands.append(std::shared_ptr<RCCommand>(new CompileCommand(cwd, args, mode)));
+    mCommands.append(std::shared_ptr<RCCommand>(new CompileCommand(cwd, args)));
 }
 
-void RClient::addCompile(const Path &dir, EscapeMode mode)
+void RClient::addCompile(const Path &dir)
 {
-    mCommands.append(std::shared_ptr<RCCommand>(new CompileCommand(dir, mode)));
+    mCommands.append(std::shared_ptr<RCCommand>(new CompileCommand(dir)));
 }
 
 int RClient::exec()
@@ -432,14 +425,33 @@ int RClient::exec()
     const int commandCount = mCommands.size();
     std::shared_ptr<Connection> connection = Connection::create(NumOptions);
     connection->newMessage().connect(std::bind(&RClient::onNewMessage, this,
-                                              std::placeholders::_1, std::placeholders::_2));
+                                               std::placeholders::_1, std::placeholders::_2));
     connection->finished().connect(std::bind([](){ EventLoop::eventLoop()->quit(); }));
     connection->disconnected().connect(std::bind([](){ EventLoop::eventLoop()->quit(); }));
-    if (!connection->connectUnix(mSocketFile, mConnectTimeout)) {
+    if (mTcpPort) {
+        if (!connection->connectTcp(mTcpHost, mTcpPort, mConnectTimeout)) {
+            if (mLogLevel >= LogLevel::Error)
+                fprintf(stdout, "Can't seem to connect to server (%s:%d)\n", mTcpHost.constData(), mTcpPort);
+            return 1;
+        }
+        connection->connected().connect(std::bind(&EventLoop::quit, loop.get()));
+        loop->exec(mConnectTimeout);
+        if (!connection->isConnected()) {
+            if (mLogLevel >= LogLevel::Error) {
+                if (mTcpPort) {
+                    fprintf(stdout, "Can't seem to connect to server (%s:%d)\n", mTcpHost.constData(), mTcpPort);
+                } else {
+                    fprintf(stdout, "Can't seem to connect to server (%s)\n", mSocketFile.constData());
+                }
+            }
+            return 1;
+        }
+    } else if (!connection->connectUnix(mSocketFile, mConnectTimeout)) {
         if (mLogLevel >= LogLevel::Error)
-            fprintf(stdout, "Can't seem to connect to server\n");
+            fprintf(stdout, "Can't seem to connect to server (%s)\n", mSocketFile.constData());
         return 1;
     }
+
     int ret = 0;
     for (int i=0; i<commandCount; ++i) {
         const std::shared_ptr<RCCommand> &cmd = mCommands.at(i);
@@ -564,6 +576,20 @@ RClient::ParseStatus RClient::parse(int &argc, char **argv)
         case SocketFile:
             mSocketFile = optarg;
             break;
+        case SocketAddress: {
+            mTcpHost.assign(optarg);
+            const int colon = mTcpHost.lastIndexOf(':');
+            if (colon == -1) {
+                fprintf(stderr, "invalid --socket-address %s\n", optarg);
+                return Parse_Error;
+            }
+            mTcpPort = atoi(optarg + colon + 1);
+            if (!mTcpPort) {
+                fprintf(stderr, "invalid --socket-address %s\n", optarg);
+                return Parse_Error;
+            }
+            mTcpHost.truncate(colon);
+            break; }
         case GuessFlags:
             mGuessFlags = true;
             break;
@@ -584,6 +610,9 @@ RClient::ParseStatus RClient::parse(int &argc, char **argv)
             break;
         case ContainingFunction:
             mQueryFlags |= QueryMessage::ContainingFunction;
+            break;
+        case ContainingFunctionLocation:
+            mQueryFlags |= QueryMessage::ContainingFunctionLocation;
             break;
         case DeclarationOnly:
             mQueryFlags |= QueryMessage::DeclarationOnly;
@@ -636,8 +665,8 @@ RClient::ParseStatus RClient::parse(int &argc, char **argv)
         case Rename:
             mQueryFlags |= QueryMessage::Rename;
             break;
-        case ElispList:
-            mQueryFlags |= QueryMessage::ElispList;
+        case Elisp:
+            mQueryFlags |= QueryMessage::Elisp;
             break;
         case FilterSystemHeaders:
             mQueryFlags |= QueryMessage::FilterSystemIncludes;
@@ -648,14 +677,23 @@ RClient::ParseStatus RClient::parse(int &argc, char **argv)
         case PathFilter: {
             Path p = optarg;
             p.resolve();
-            mPathFilters.insert(p);
+            mPathFilters.insert({ p, QueryMessage::PathFilter::Self });
+            break; }
+        case DependencyFilter: {
+            Path p = optarg;
+            p.resolve();
+            if (!p.isFile()) {
+                fprintf(stderr, "%s doesn't seem to be a file\n", optarg);
+                return Parse_Error;
+            }
+            mPathFilters.insert({ p, QueryMessage::PathFilter::Dependency });
             break; }
         case KindFilter:
             mKindFilters.insert(optarg);
             break;
-        case WildcardSymbolNames: {
+        case WildcardSymbolNames:
             mQueryFlags |= QueryMessage::WildcardSymbolNames;
-            break; }
+            break;
         case RangeFilter: {
             char *end;
             mMinOffset = strtoul(optarg, &end, 10);
@@ -800,10 +838,7 @@ RClient::ParseStatus RClient::parse(int &argc, char **argv)
             addLog(RdmLogCommand::Default);
             break;
         case Diagnostics:
-            addLog(RTags::CompilationError);
-            break;
-        case XmlDiagnostics:
-            addLog(RTags::CompilationErrorXml);
+            addLog(RTags::DiagnosticsLevel);
             break;
         case QuitRdm: {
             const char *arg = 0;
@@ -826,6 +861,15 @@ RClient::ParseStatus RClient::parse(int &argc, char **argv)
         case DeleteProject:
             addQuery(QueryMessage::DeleteProject, optarg);
             break;
+        case DebugLocations: {
+            String arg;
+            if (optarg) {
+                arg = optarg;
+            } else if (optind < argc && argv[optind][0] != '-') {
+                arg = argv[optind++];
+            }
+            addQuery(QueryMessage::DebugLocations, arg);
+            break; }
         case SendDiagnostics:
             addQuery(QueryMessage::SendDiagnostics, optarg);
             break;
@@ -847,6 +891,9 @@ RClient::ParseStatus RClient::parse(int &argc, char **argv)
                 printf("%s: \"%s\"\n", it.first.constData(), it.second.constData());
             }
             return Parse_Ok; }
+        case CurrentProject:
+            addQuery(QueryMessage::Project, String(), QueryMessage::CurrentProjectOnly);
+            break;
         case CheckReindex:
         case Reindex:
         case Project:
@@ -967,7 +1014,7 @@ RClient::ParseStatus RClient::parse(int &argc, char **argv)
                 fprintf(stderr, "no compile_commands.json file in %s\n", dir.constData());
                 return Parse_Error;
             }
-            addCompile(dir, Escape_Auto);
+            addCompile(dir);
 #endif
             break; }
         case HasFileManager: {
@@ -1026,28 +1073,23 @@ RClient::ParseStatus RClient::parse(int &argc, char **argv)
             if (args == "-" || args.isEmpty()) {
                 char buf[16384];
                 while (fgets(buf, sizeof(buf), stdin)) {
-                    addCompile(Path::pwd(), buf, Escape_Do);
+                    addCompile(Path::pwd(), buf);
                 }
             } else {
-                addCompile(Path::pwd(), args, Escape_Dont);
+                addCompile(Path::pwd(), args);
             }
             break; }
         case IsIndexing:
             addQuery(QueryMessage::IsIndexing);
-            break;
-        case UnescapeCompileCommands:
-            mEscapeMode = Escape_Do;
-            break;
-        case NoUnescapeCompileCommands:
-            mEscapeMode = Escape_Dont;
             break;
         case NoSortReferencesByInput:
             mQueryFlags |= QueryMessage::NoSortReferencesByInput;
             break;
         case IsIndexed:
         case DumpFile:
-        case Dependencies:
+        case CheckIncludes:
         case GenerateTest:
+        case Diagnose:
         case FixIts: {
             Path p = optarg;
             if (!p.exists()) {
@@ -1067,19 +1109,32 @@ RClient::ParseStatus RClient::parse(int &argc, char **argv)
                 }
             }
             p.resolve();
+            Flags<QueryMessage::Flag> extraQueryFlags;
             QueryMessage::Type type = QueryMessage::Invalid;
             switch (opt->option) {
             case GenerateTest: type = QueryMessage::GenerateTest; break;
-            case Dependencies: type = QueryMessage::Dependencies; break;
             case FixIts: type = QueryMessage::FixIts; break;
             case DumpFile: type = QueryMessage::DumpFile; break;
+            case CheckIncludes: type = QueryMessage::DumpFile; extraQueryFlags |= QueryMessage::DumpCheckIncludes; break;
+            case Diagnose: type = QueryMessage::Diagnose; break;
             case IsIndexed: type = QueryMessage::IsIndexed; break;
             default: assert(0); break;
             }
 
-            addQuery(type, p);
+            addQuery(type, p, extraQueryFlags);
             break; }
-        case DumpFileMaps: {
+        case AllDependencies: {
+            String encoded;
+            List<String> args;
+            while (optind < argc && argv[optind][0] != '-') {
+                args.append(argv[optind++]);
+            }
+            Serializer s(encoded);
+            s << Path() << args;
+            addQuery(QueryMessage::Dependencies, encoded);
+            break; }
+        case DumpFileMaps:
+        case Dependencies: {
             Path p = optarg;
             if (!p.isFile()) {
                 fprintf(stderr, "%s is not a file\n", optarg);
@@ -1094,9 +1149,8 @@ RClient::ParseStatus RClient::parse(int &argc, char **argv)
             String encoded;
             Serializer s(encoded);
             s << p << args;
-            addQuery(QueryMessage::DumpFileMaps, encoded);
-         break; }
-
+            addQuery(opt->option == DumpFileMaps ? QueryMessage::DumpFileMaps : QueryMessage::Dependencies, encoded);
+            break; }
         case PreprocessFile: {
             Path p = optarg;
             p.resolve(Path::MakeAbsolute);
@@ -1186,4 +1240,3 @@ List<Path> RClient::pathEnvironment() const
         mPathEnvironment = Rct::pathEnvironment();
     return mPathEnvironment;
 }
-

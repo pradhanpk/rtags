@@ -14,9 +14,10 @@ You should have received a copy of the GNU General Public License
 along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
 #include "ScanThread.h"
-#include "Server.h"
+
 #include "Filter.h"
 #include "Project.h"
+#include "Server.h"
 
 ScanThread::ScanThread(const Path &path)
     : Thread(), mPath(path), mFilters(Server::instance()->options().excludeFilters)
@@ -26,18 +27,18 @@ ScanThread::ScanThread(const Path &path)
 Set<Path> ScanThread::paths(const Path &path, const List<String> &filters)
 {
     Set<Path> paths;
-    path.visit([&paths, &filters](const Path &path) {
-                   const Filter::Result result = Filter::filter(path, filters);
+    path.visit([&paths, &filters](const Path &p) {
+                   const Filter::Result result = Filter::filter(p, filters);
                    switch (result) {
                    case Filter::Filtered:
                        return Path::Continue;
                    case Filter::Directory:
-                       if (Path::exists(path + "/.rtags-ignore"))
+                       if (Path::exists(p + "/.rtags-ignore"))
                            return Path::Continue;
                        return Path::Recurse;
                    case Filter::File:
                    case Filter::Source:
-                       paths.insert(path);
+                       paths.insert(p);
                        break;
                    }
                    return Path::Continue;
@@ -49,5 +50,3 @@ void ScanThread::run()
 {
     mFinished(paths(mPath, mFilters));
 }
-
-

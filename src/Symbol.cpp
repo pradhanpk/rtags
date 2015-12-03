@@ -14,10 +14,8 @@
    You should have received a copy of the GNU General Public License
    along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
-#include "Symbol.h"
 #include "RTags.h"
-#include "RTagsClang.h"
-#include "Project.h"
+#include "Symbol.h"
 
 uint16_t Symbol::targetsValue() const
 {
@@ -37,7 +35,7 @@ static inline const char *linkageSpelling(CXLinkageKind kind)
 }
 
 String Symbol::toString(Flags<ToStringFlag> cursorInfoFlags,
-                        Flags<Location::KeyFlag> keyFlags,
+                        Flags<Location::ToStringFlag> locationToStringFlags,
                         const std::shared_ptr<Project> &project) const
 {
     auto properties = [this]()
@@ -52,6 +50,7 @@ String Symbol::toString(Flags<ToStringFlag> cursorInfoFlags,
             } else if (flags & VirtualMethod) {
                 ret << "Virtual";
             }
+
             if (flags & ConstMethod) {
                 ret << "Const";
             } else if (flags & StaticMethod) {
@@ -64,6 +63,12 @@ String Symbol::toString(Flags<ToStringFlag> cursorInfoFlags,
                 ret << "Auto";
             if (flags & AutoRef)
                 ret << "AutoRef";
+
+            if (flags & MacroExpansion)
+                ret << "MacroExpansion";
+            if (flags & TemplateSpecialization)
+                ret << "TemplateSpecialization";
+
             if (ret.isEmpty())
                 return String();
             String joined = String::join(ret, ' ');
@@ -72,12 +77,20 @@ String Symbol::toString(Flags<ToStringFlag> cursorInfoFlags,
         };
 
     List<String> bases;
+    List<String> args;
     if (project) {
-        extern String findSymbolNameByUsr(const std::shared_ptr<Project> &, uint32_t, const String &);
+        extern String findSymbolNameByUsr(const std::shared_ptr<Project> &, const String &, const Location &location);
         for (const auto &base : baseClasses) {
-            const String usr = findSymbolNameByUsr(project, location.fileId(), base);
-            if (!usr.isEmpty()) {
-                bases << usr;
+            const String symbolName = findSymbolNameByUsr(project, base, location);
+            if (!symbolName.isEmpty()) {
+                bases << symbolName;
+            }
+        }
+        extern String findSymbolNameByLocation(const std::shared_ptr<Project> &project, const Location &location);
+        for (const auto &arg : arguments) {
+            const String symbolName = findSymbolNameByLocation(project, arg);
+            if (!symbolName.isEmpty()) {
+                args << symbolName;
             }
         }
     } else {
@@ -107,6 +120,8 @@ String Symbol::toString(Flags<ToStringFlag> cursorInfoFlags,
                                       "%s" // usr
                                       "%s" // sizeof
                                       "%s" // fieldoffset
+                                      "%s" // alignment
+                                      "%s" // arguments
                                       "%s" // baseclasses
                                       "%s" // briefComment
                                       "%s", // xmlComment
@@ -116,7 +131,7 @@ String Symbol::toString(Flags<ToStringFlag> cursorInfoFlags,
                                       symbolLength,
                                       startLine != -1 ? String::format<32>("Range: %d:%d-%d:%d\n", startLine, startColumn, endLine, endColumn).constData() : "",
 #if CINDEX_VERSION_MINOR > 1
-                                      kind == CXCursor_EnumConstantDecl ? String::format<32>("Enum Value: %lld\n", enumValue).constData() :
+                                      kind == CXCursor_EnumConstantDecl ? String::format<32>("Enum Value: %lld\n", static_cast<long long>(enumValue)).constData() :
 #endif
                                       "",
                                       linkageSpelling(linkage),
@@ -125,6 +140,7 @@ String Symbol::toString(Flags<ToStringFlag> cursorInfoFlags,
                                       size > 0 ? String::format<16>("sizeof: %d\n", size).constData() : "",
                                       fieldOffset >= 0 ? String::format<32>("field offset (bits/bytes): %d/%d\n", fieldOffset, fieldOffset / 8).constData() : "",
                                       alignment >= 0 ? String::format<32>("alignment (bytes): %d\n", alignment).constData() : "",
+                                      args.isEmpty() ? "" : String::format<1024>("Arguments: %s\n", String::join(args, ", ").constData()).constData(),
                                       bases.isEmpty() ? "" : String::format<64>("BaseClasses: %s\n", String::join(bases, ", ").constData()).constData(),
                                       briefComment.isEmpty() ? "" : String::format<1024>("Brief comment: %s\n", briefComment.constData()).constData(),
                                       xmlComment.isEmpty() ? "" : String::format<16384>("Xml comment: %s\n", xmlComment.constData()).constData());
@@ -134,11 +150,11 @@ String Symbol::toString(Flags<ToStringFlag> cursorInfoFlags,
         if (targets.size()) {
             ret.append("Targets:\n");
             auto best = RTags::bestTarget(targets);
-            ret.append(String::format<128>("    %s\n", best.location.key(keyFlags).constData()));
+            ret.append(String::format<128>("    %s\n", best.location.toString(locationToStringFlags).constData()));
 
             for (const auto &tit : targets) {
                 if (tit.location != best.location)
-                    ret.append(String::format<128>("    %s\n", tit.location.key(keyFlags).constData()));
+                    ret.append(String::format<128>("    %s\n", tit.location.toString(locationToStringFlags).constData()));
             }
         }
     }
@@ -149,7 +165,7 @@ String Symbol::toString(Flags<ToStringFlag> cursorInfoFlags,
         if (references.size()) {
             ret.append("References:\n");
             for (const auto &r : references) {
-                ret.append(String::format<128>("    %s\n", r.location.key(keyFlags).constData()));
+                ret.append(String::format<128>("    %s\n", r.location.toString(locationToStringFlags).constData()));
             }
         }
     }

@@ -14,9 +14,10 @@
    along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
 #include "Source.h"
+
 #include "Location.h"
+#include "rct/EventLoop.h"
 #include "RTags.h"
-#include <rct/EventLoop.h>
 #include "Server.h"
 
 extern const Server::Options *serverOptions();
@@ -136,7 +137,7 @@ static Path findFileInPath(const Path &unresolved, const Path &cwd, const List<P
         bool ok;
         const Path p = Path::resolved(file, Path::RealPath, path, &ok);
         if (ok) {
-            if (!strcmp(p.fileName(), "gcc-rtags-wrapper.sh") && !access(p.nullTerminated(), R_OK | X_OK)) {
+            if (strcmp(p.fileName(), "gcc-rtags-wrapper.sh") && !access(p.nullTerminated(), R_OK | X_OK)) {
                 debug() << "Found compiler" << p << "for" << unresolved;
                 return Path::resolved(file, Path::MakeAbsolute, path);
             }
@@ -187,14 +188,19 @@ static inline void addIncludeArg(List<Source::Include> &includePaths,
 {
     const String &arg = args.at(idx);
     Path path;
-    auto fixPCHPath = [&path, cwd]() {
-        if (!path.exists()) {
-            for (const char *suffix : { ".gch", ".pch" }) {
-                const Path p = Path::resolved(path + suffix, Path::MakeAbsolute, cwd);
-                if (p.exists()) {
-                    path = p.mid(0, p.size() - 4);
-                    break;
+    auto fixPCHPath = [&path, cwd, &type]() {
+        if (!path.isDir()) {
+            if (!path.exists()) {
+                for (const char *suffix : { ".gch", ".pch" }) {
+                    const Path p = Path::resolved(path + suffix, Path::MakeAbsolute, cwd);
+                    if (p.exists()) {
+                        path = p.mid(0, p.size() - 4);
+                        type = Source::Include::Type_PCH;
+                        break;
+                    }
                 }
+            } else {
+                type = Source::Include::Type_PCH;
             }
         }
     };
@@ -202,14 +208,18 @@ static inline void addIncludeArg(List<Source::Include> &includePaths,
         path = Path::resolved(args.value(++idx), Path::MakeAbsolute, cwd);
         if (type == Source::Include::Type_None) {
             fixPCHPath();
-            arguments.append(arg);
-            arguments.append(path);
+            if (type == Source::Include::Type_None) {
+                arguments.append(arg);
+                arguments.append(path);
+            }
         }
     } else {
         path = Path::resolved(arg.mid(argLen), Path::MakeAbsolute, cwd);
         if (type == Source::Include::Type_None) {
             fixPCHPath();
-            arguments.append(arg.left(argLen) + path);
+            if (type == Source::Include::Type_None) {
+                arguments.append(arg.left(argLen) + path);
+            }
         }
     }
     if (type != Source::Include::Type_None) {
@@ -245,6 +255,7 @@ static const char* valueArgs[] = {
     "-MT",
     "-MQ",
     "-gcc-toolchain",
+    "-include",
     0
 };
 
@@ -259,6 +270,12 @@ static const char *blacklist[] = {
     "-MT",
     "-MQ",
     "-gcc-toolchain",
+    "-fno-var-tracking",
+    "-fvar-tracking",
+    "-fno-var-tracking-assignments",
+    "-fvar-tracking-assignments",
+    "-fvar-tracking-assignments-toggle",
+    "-Og",
     0
 };
 
@@ -307,6 +324,11 @@ static Path resolveCompiler(const Path &unresolved, const Path &cwd, const List<
     if (compiler.isEmpty())
         compiler = findFileInPath(unresolved, cwd, pathEnvironment);
 
+    if (!compiler.isFile()) {
+        compiler.clear();
+    } else if (compiler.contains("..")) {
+        compiler.canonicalize();
+    }
     return compiler;
 }
 
@@ -323,6 +345,8 @@ static inline bool isCompiler(const Path &fullPath)
     }
 
     String compiler = fullPath.fileName();
+    if (compiler.endsWith(".exe"))
+        return true;
 
     String c;
     int dash = compiler.lastIndexOf('-');
@@ -368,16 +392,15 @@ static inline bool isCompiler(const Path &fullPath)
 
 struct Input {
     Path realPath, absolute;
-    uint32_t fileId;
     Source::Language language;
 };
 
 List<Source> Source::parse(const String &cmdLine,
-                           Flags<ParseFlag> parseFlags,
                            const Path &cwd,
                            const List<Path> &pathEnvironment,
                            List<Path> *unresolvedInputLocations)
 {
+    assert(cwd.endsWith('/'));
     assert(!unresolvedInputLocations || unresolvedInputLocations->isEmpty());
     String args = cmdLine;
     char quote = '\0';
@@ -385,26 +408,34 @@ List<Source> Source::parse(const String &cmdLine,
     {
         char *cur = args.data();
         char *prev = cur;
-        // ### handle escaped quotes?
         int size = args.size();
+        int escape = 0;
         while (size > 0) {
             switch (*cur) {
             case '"':
             case '\'':
-                if (quote == '\0') {
-                    quote = *cur;
-                } else if (*cur == quote) {
-                    quote = '\0';
+                if (escape % 2 == 0) {
+                    if (quote == '\0') {
+                        quote = *cur;
+                    } else if (*cur == quote) {
+                        quote = '\0';
+                    }
                 }
+                escape = 0;
+                break;
+            case '\\':
+                ++escape;
                 break;
             case ' ':
                 if (quote == '\0') {
                     if (cur > prev)
-                        split.append(trim(prev, cur - prev));
+                        split.append(unquote(trim(prev, cur - prev)));
                     prev = cur + 1;
                 }
+                escape = 0;
                 break;
             default:
+                escape = 0;
                 break;
             }
             --size;
@@ -504,7 +535,7 @@ List<Source> Source::parse(const String &cmdLine,
                         define.define = def;
                     } else {
                         define.define = def.left(eq);
-                        define.value = (parseFlags & Escape ? unquote(def.mid(eq + 1)) : def.mid(eq + 1));
+                        define.value = def.mid(eq + 1);
                     }
                     debug("Parsing define: [%s] => [%s]%s[%s]", def.constData(),
                           define.define.constData(),
@@ -589,8 +620,8 @@ List<Source> Source::parse(const String &cmdLine,
                         p.canonicalize();
                     }
                     buildRoot = RTags::findProjectRoot(p, RTags::BuildRoot);
+                    buildRoot.resolve(Path::RealPath, cwd);
                     if (buildRoot.isDir()) {
-                        buildRoot.resolve(Path::RealPath);
                         buildRootId = Location::insertFile(buildRoot);
                     } else {
                         buildRoot.clear();
@@ -599,10 +630,7 @@ List<Source> Source::parse(const String &cmdLine,
             } else {
                 arguments.append(arg);
                 if (hasValue(arg)) {
-                    String val = split.value(++i);
-                    if (parseFlags & Escape)
-                        val = unquote(val);
-                    arguments.append(Path::resolved(val, Path::MakeAbsolute, path));
+                    arguments.append(Path::resolved(split.value(++i), Path::MakeAbsolute, path));
                 }
             }
         } else {
@@ -611,8 +639,12 @@ List<Source> Source::parse(const String &cmdLine,
             if (!compilerId) {
                 add = false;
                 const Path compiler = resolveCompiler(arg, cwd, pathEnvironment);
-                compilerId = Location::insertFile(compiler);
-                validCompiler = isCompiler(compiler);
+                if (!access(compiler.nullTerminated(), R_OK | X_OK)) {
+                    validCompiler = isCompiler(compiler);
+                    compilerId = Location::insertFile(compiler);
+                } else {
+                    break;
+                }
             } else {
                 const Path c = arg;
                 resolved = Path::resolved(arg, Path::RealPath, cwd);
@@ -653,7 +685,7 @@ List<Source> Source::parse(const String &cmdLine,
     if (!inputs.isEmpty()) {
         if (!buildRootId) {
             buildRoot = RTags::findProjectRoot(inputs.first().realPath, RTags::BuildRoot);
-            buildRoot.resolve(Path::RealPath);
+            buildRoot.resolve(Path::RealPath, cwd);
             buildRootId = Location::insertFile(buildRoot);
         }
         includePathHash = ::hashIncludePaths(includePaths, buildRoot);
@@ -664,7 +696,7 @@ List<Source> Source::parse(const String &cmdLine,
             unresolvedInputLocations->append(input.absolute);
             Source &source = ret[idx++];
             source.directory = path;
-            source.fileId = Location::insertFile(input.absolute);
+            source.fileId = Location::insertFile(input.realPath);
             source.extraCompiler = extraCompiler;
             source.compilerId = compilerId;
             source.buildRootId = buildRootId;
@@ -675,6 +707,7 @@ List<Source> Source::parse(const String &cmdLine,
             source.arguments = arguments;
             source.sysRootIndex = sysRootIndex;
             source.language = input.language;
+            assert(source.language != NoLanguage);
         }
     }
     if (testLog(LogLevel::Warning))
@@ -775,33 +808,6 @@ bool Source::compareArguments(const Source &other) const
     return false;
 }
 
-static inline bool isPch(const Path &path)
-{
-    if (path.isFile()) {
-        static const unsigned char pch[][8] = {
-            { 0x43, 0x50, 0x43, 0x48, 0x01, 0x0c, 0x00, 0x00 }, // clang pch
-            { 0x67, 0x70, 0x63, 0x68, 0x43, 0x30, 0x31, 0x34 }, // gcc c-header pch
-            { 0x67, 0x70, 0x63, 0x68, 0x2b, 0x30, 0x31, 0x34 } // gcc c++-header pch
-        };
-        const String contents = path.readAll(8);
-        if (contents.size() == 8) {
-            for (const unsigned char *p : pch) {
-                if (!memcmp(contents.constData(), p, 8)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    for (const char *suffix : { ".gch", ".pch" }) {
-        const Path p = path + suffix;
-        if (p.exists())
-            return true;
-    }
-    return false;
-}
-
 List<String> Source::toCommandLine(Flags<CommandLineFlag> flags) const
 {
     const Server::Options *options = serverOptions();
@@ -810,10 +816,11 @@ List<String> Source::toCommandLine(Flags<CommandLineFlag> flags) const
 
     List<String> ret;
     ret.reserve(64);
-    if (flags & IncludeCompiler) {
+    if ((flags & IncludeCompiler) == IncludeCompiler) {
         ret.append(compiler());
-        if (!extraCompiler.isEmpty())
-            ret.append(extraCompiler);
+    }
+    if (flags & IncludeExtraCompiler && !extraCompiler.isEmpty()) {
+        ret.append(extraCompiler);
     }
 
     Map<String, String> config;
@@ -827,12 +834,8 @@ List<String> Source::toCommandLine(Flags<CommandLineFlag> flags) const
         const String &arg = arguments.at(i);
         const bool hasValue = ::hasValue(arg);
         bool skip = false;
-        if (flags & FilterBlacklist) {
-            if (isBlacklisted(arg)) {
-                skip = true;
-            } else if (arg == "-include") {
-                skip = isPch(arguments.value(i + 1));
-            }
+        if (flags & FilterBlacklist && isBlacklisted(arg)) {
+            skip = true;
         }
         if (!skip && remove.contains(arg))
             skip = true;
@@ -875,6 +878,8 @@ List<String> Source::toCommandLine(Flags<CommandLineFlag> flags) const
             case Source::Include::Type_SystemFramework:
                 ret << "-iframework" << inc.path;
                 break;
+            case Source::Include::Type_PCH:
+                break;
             }
         }
         if (!(flags & ExcludeDefaultIncludePaths)) {
@@ -894,6 +899,8 @@ List<String> Source::toCommandLine(Flags<CommandLineFlag> flags) const
                     break;
                 case Source::Include::Type_SystemFramework:
                     ret << "-iframework" << inc.path;
+                    break;
+                case Source::Include::Type_PCH:
                     break;
                 }
             }

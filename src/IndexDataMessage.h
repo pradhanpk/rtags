@@ -16,13 +16,12 @@
 #ifndef IndexDataMessage_h
 #define IndexDataMessage_h
 
-#include "RTagsMessage.h"
 #include "Diagnostic.h"
-#include <rct/Message.h>
-#include <rct/Serializer.h>
-#include <rct/String.h>
 #include "IndexerJob.h"
-#include <rct/Flags.h>
+#include "rct/Flags.h"
+#include "rct/Serializer.h"
+#include "rct/String.h"
+#include "RTagsMessage.h"
 
 class IndexDataMessage : public RTagsMessage
 {
@@ -44,7 +43,8 @@ public:
     enum Flag {
         None = 0x0,
         ParseFailure = 0x1,
-        InclusionError = 0x2
+        InclusionError = 0x2,
+        UsedPCH = 0x4
     };
     Flags<Flag> flags() const { return mFlags; }
     void setFlags(Flags<Flag> flags) { mFlags = flags; }
@@ -98,13 +98,13 @@ public:
     FixIts &fixIts() { return mFixIts; }
     Diagnostics &diagnostics() { return mDiagnostics; }
     Includes &includes() { return mIncludes; }
-    Declarations &declarations() { return mDeclarations; }
     enum FileFlag {
         NoFileFlag = 0x0,
         Visited = 0x1,
         HeaderError = 0x2
     };
     Hash<uint32_t, Flags<FileFlag> > &files() { return mFiles; }
+    const Hash<uint32_t, Flags<FileFlag> > &files() const { return mFiles; }
 private:
     Path mProject;
     uint64_t mParseTime, mKey, mId;
@@ -113,7 +113,6 @@ private:
     FixIts mFixIts;
     Diagnostics mDiagnostics;
     Includes mIncludes;
-    Declarations mDeclarations; // function declarations and forward declaration
     Hash<uint32_t, Flags<FileFlag> > mFiles;
     Flags<Flag> mFlags;
 };
@@ -123,16 +122,14 @@ RCT_FLAGS(IndexDataMessage::FileFlag);
 
 inline void IndexDataMessage::encode(Serializer &serializer) const
 {
-    serializer << mProject << mParseTime << mKey << mId << mIndexerJobFlags
-               << mMessage << mFixIts << mIncludes << mDiagnostics << mFiles
-               << mDeclarations << mFlags;
+    serializer << mProject << mParseTime << mKey << mId << mIndexerJobFlags << mMessage
+               << mFixIts << mIncludes << mDiagnostics << mFiles << mFlags;
 }
 
 inline void IndexDataMessage::decode(Deserializer &deserializer)
 {
-    deserializer >> mProject >> mParseTime >> mKey >> mId >> mIndexerJobFlags
-                 >> mMessage >> mFixIts >> mIncludes >> mDiagnostics
-                 >> mFiles >> mDeclarations >> mFlags;
+    deserializer >> mProject >> mParseTime >> mKey >> mId >> mIndexerJobFlags >> mMessage
+                 >> mFixIts >> mIncludes >> mDiagnostics >> mFiles >> mFlags;
 }
 
 #endif

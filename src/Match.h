@@ -16,10 +16,13 @@ along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 #ifndef Match_h
 #define Match_h
 
-#include <rct/String.h>
-#include <rct/Log.h>
 #include <regex>
-#include <rct/Flags.h>
+
+#include "Location.h"
+#include "rct/Flags.h"
+#include "rct/Log.h"
+#include "rct/Rct.h"
+#include "rct/String.h"
 
 class Match
 {
@@ -91,7 +94,7 @@ RCT_FLAGS(Match::Flag);
 inline Log operator<<(Log log, const Match &match)
 {
     String ret = "Match(flags: ";
-    ret += String::number(match.flags(), 16);
+    ret += String::number(match.flags().cast<unsigned int>(), 16);
     if (match.flags() & Match::Flag_Regex)
         ret += " rx";
     if (!match.pattern().isEmpty())

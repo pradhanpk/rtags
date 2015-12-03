@@ -16,12 +16,10 @@ along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 #ifndef FindFileJob_h
 #define FindFileJob_h
 
-#include <rct/String.h>
-#include <rct/List.h>
-#include "RTagsClang.h"
-#include "QueryJob.h"
-#include "Location.h"
 #include <regex>
+
+#include "QueryJob.h"
+#include "rct/String.h"
 
 class FindFileJob : public QueryJob
 {

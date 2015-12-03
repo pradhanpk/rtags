@@ -30,8 +30,13 @@ compile_commands.json
 /src/libshared.dylib
 /src/.gdb_brestore
 /src/.gdb_brestore.txt
+/src/*.elc
 /.lsdev_default
 /tests/186/
 /install_manifest.txt
 /build/marker
-.dir-locals.el
+/Uninstall.cmake
+/automated_tests/test_runner.pyc
+/src/*_cotire.cmake
+/src/cotire/
+/build/

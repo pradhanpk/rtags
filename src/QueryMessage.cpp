@@ -14,8 +14,9 @@ You should have received a copy of the GNU General Public License
 along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
 #include "QueryMessage.h"
+
+#include "rct/Serializer.h"
 #include "RTags.h"
-#include <rct/Serializer.h>
 
 QueryMessage::QueryMessage(Type type)
     : RTagsMessage(MessageId), mType(type), mMax(-1), mMinLine(-1), mMaxLine(-1), mBuildIndex(0), mTerminalWidth(-1)
@@ -36,13 +37,15 @@ void QueryMessage::decode(Deserializer &deserializer)
                  >> mCurrentFile >> mUnsavedFiles >> mTerminalWidth;
 }
 
-Flags<Location::KeyFlag> QueryMessage::keyFlags(Flags<Flag> queryFlags)
+Flags<Location::ToStringFlag> QueryMessage::locationToStringFlags(Flags<Flag> queryFlags)
 {
-    Flags<Location::KeyFlag> ret;
+    Flags<Location::ToStringFlag> ret;
     if (!(queryFlags & NoContext))
         ret |= Location::ShowContext;
     if (queryFlags & NoColor)
         ret |= Location::NoColor;
+    if (queryFlags & AbsolutePath)
+        ret |= Location::AbsolutePath;
     return ret;
 }
 
@@ -67,8 +70,8 @@ QueryMessage::Flag QueryMessage::flagFromString(const String &string)
         return AllReferences;
     } else if (string == "reverse-sort") {
         return ReverseSort;
-    } else if (string == "elisp-list") {
-        return ElispList;
+    } else if (string == "elisp") {
+        return Elisp;
     } else if (string == "imenu") {
         return IMenu;
     } else if (string == "match-regexp") {

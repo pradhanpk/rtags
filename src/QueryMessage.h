@@ -16,14 +16,15 @@ along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 #ifndef QUERYMESSAGE_H
 #define QUERYMESSAGE_H
 
-#include "RTagsMessage.h"
-#include "RTags.h"
-#include <rct/Path.h>
-#include <rct/Serializer.h>
-#include <rct/Hash.h>
-#include "Match.h"
+#include <algorithm>
 #include "Location.h"
-#include <rct/Flags.h>
+#include "Match.h"
+#include "rct/Flags.h"
+#include "rct/Log.h"
+#include "rct/Path.h"
+#include "rct/Serializer.h"
+#include "RTags.h"
+#include "RTagsMessage.h"
 
 class QueryMessage : public RTagsMessage
 {
@@ -36,8 +37,10 @@ public:
         ClassHierarchy,
         ClearProjects,
         CodeCompleteAt,
+        DebugLocations,
         DeleteProject,
         Dependencies,
+        Diagnose,
         DumpCompilationDatabase,
         DumpCompletions,
         DumpFile,
@@ -69,48 +72,66 @@ public:
     };
 
     enum Flag {
-        NoFlag = 0x000000000,
-        NoContext = 0x000000001,
-        FilterSystemIncludes = 0x000000004,
-        StripParentheses = 0x000000008,
-        AllReferences = 0x000000010,
-        ReverseSort = 0x000000020,
-        ElispList = 0x000000040,
-        IMenu = 0x000000080,
-        MatchRegex = 0x000000100,
-        MatchCaseInsensitive = 0x000000200,
-        FindVirtuals = 0x000000400,
-        Silent = 0x000000800,
-        AbsolutePath = 0x000001000,
-        FindFilePreferExact = 0x000002000,
-        SymbolInfoIncludeParents = 0x000004000,
-        SymbolInfoExcludeTargets = 0x000008000,
-        SymbolInfoExcludeReferences = 0x000010000,
-        DeclarationOnly = 0x000020000,
-        DefinitionOnly = 0x000040000,
-        AllTargets = 0x000080000,
-        CursorKind = 0x000100000,
-        DisplayName = 0x000200000,
-        CompilationFlagsOnly = 0x000400000,
-        CompilationFlagsSplitLine = 0x000800000,
-        DumpIncludeHeaders = 0x001000000,
-        SilentQuery = 0x002000000,
-        SynchronousCompletions = 0x004000000,
-        NoSortReferencesByInput = 0x008000000,
-        HasLocation = 0x010000000,
-        WildcardSymbolNames = 0x020000000,
-        NoColor = 0x040000000,
-        Rename = 0x080000000,
-        ContainingFunction = 0x100000000,
-        Wait = 0x200000000
+        NoFlag = 0x0,
+        NoContext = (1ull << 0),
+        FilterSystemIncludes = (1ull << 1),
+        StripParentheses = (1ull << 2),
+        AllReferences = (1ull << 3),
+        ReverseSort = (1ull << 4),
+        Elisp = (1ull << 5),
+        IMenu = (1ull << 6),
+        MatchRegex = (1ull << 7),
+        MatchCaseInsensitive = (1ull << 8),
+        FindVirtuals = (1ull << 9),
+        Silent = (1ull << 10),
+        AbsolutePath = (1ull << 11),
+        FindFilePreferExact = (1ull << 12),
+        SymbolInfoIncludeParents = (1ull << 13),
+        SymbolInfoExcludeTargets = (1ull << 14),
+        SymbolInfoExcludeReferences = (1ull << 15),
+        DeclarationOnly = (1ull << 16),
+        DefinitionOnly = (1ull << 17),
+        AllTargets = (1ull << 18),
+        CursorKind = (1ull << 19),
+        DisplayName = (1ull << 20),
+        CompilationFlagsOnly = (1ull << 21),
+        CompilationFlagsSplitLine = (1ull << 22),
+        DumpIncludeHeaders = (1ull << 23),
+        SilentQuery = (1ull << 24),
+        SynchronousCompletions = (1ull << 25),
+        NoSortReferencesByInput = (1ull << 26),
+        HasLocation = (1ull << 27),
+        WildcardSymbolNames = (1ull << 28),
+        NoColor = (1ull << 29),
+        Rename = (1ull << 30),
+        ContainingFunction = (1ull << 31),
+        ContainingFunctionLocation = (1ull << 32),
+        DumpCheckIncludes = (1ull << 33),
+        CurrentProjectOnly = (1ull << 34),
+        Wait = (1ull << 35)
     };
 
     QueryMessage(Type type = Invalid);
 
     Type type() const { return mType; }
 
-    const List<String> &pathFilters() const { return mPathFilters; }
-    void setPathFilters(const Set<String> &pathFilters)
+    struct PathFilter {
+        String pattern;
+        enum Mode {
+            Self,
+            Dependency
+        } mode;
+
+        bool operator<(const PathFilter &other) const
+        {
+            const int cmp = pattern.compare(other.pattern);
+            if (!cmp)
+                return mode < other.mode;
+            return cmp < 0;
+        }
+    };
+    const List<PathFilter> &pathFilters() const { return mPathFilters; }
+    void setPathFilters(const Set<PathFilter> &pathFilters)
     {
         mPathFilters = pathFilters.toList();
         std::sort(mPathFilters.begin(), mPathFilters.end());
@@ -168,8 +189,8 @@ public:
 
     void setFlag(Flag flag, bool on = true) { mFlags.set(flag, on); }
     static Flag flagFromString(const String &string);
-    static Flags<Location::KeyFlag> keyFlags(Flags<Flag> queryFlags);
-    inline Flags<Location::KeyFlag> keyFlags() const { return keyFlags(mFlags); }
+    static Flags<Location::ToStringFlag> locationToStringFlags(Flags<Flag> queryFlags);
+    inline Flags<Location::ToStringFlag> locationToStringFlags() const { return locationToStringFlags(mFlags); }
 
     virtual void encode(Serializer &serializer) const override;
     virtual void decode(Deserializer &deserializer) override;
@@ -181,12 +202,26 @@ private:
     Type mType;
     Flags<QueryMessage::Flag> mFlags;
     int mMax, mMinLine, mMaxLine, mBuildIndex;
-    List<String> mPathFilters;
+    List<PathFilter> mPathFilters;
     Set<String> mKindFilters;
     Path mCurrentFile;
     UnsavedFiles mUnsavedFiles;
     int mTerminalWidth;
 };
+
+inline Serializer &operator<<(Serializer &s, const QueryMessage::PathFilter &filter)
+{
+    s << filter.pattern << static_cast<uint8_t>(filter.mode);
+    return s;
+}
+
+inline Deserializer &operator>>(Deserializer &s, QueryMessage::PathFilter &filter)
+{
+    uint8_t mode;
+    s >> filter.pattern >> mode;
+    filter.mode = static_cast<QueryMessage::PathFilter::Mode>(mode);
+    return s;
+}
 
 RCT_FLAGS(QueryMessage::Flag);
 

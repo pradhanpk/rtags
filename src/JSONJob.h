@@ -16,10 +16,8 @@ along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 #ifndef JSONJob_h
 #define JSONJob_h
 
-#include <rct/String.h>
-#include "QueryJob.h"
-#include "RTags.h"
 #include "Match.h"
+#include "QueryJob.h"
 
 class QueryMessage;
 class JSONJob : public QueryJob

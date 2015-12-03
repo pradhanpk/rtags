@@ -14,9 +14,11 @@ You should have received a copy of the GNU General Public License
 along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
 #include "Location.h"
-#include "Server.h"
-#include <rct/Rct.h>
+
+#include "rct/Rct.h"
 #include "RTags.h"
+#include "Server.h"
+
 Hash<Path, uint32_t> Location::sPathsToIds;
 Hash<uint32_t, Path> Location::sIdsToPaths;
 uint32_t Location::sLastId = 0;
@@ -34,7 +36,7 @@ const uint64_t Location::FILEID_MASK = createMask(0, FileBits);
 const uint64_t Location::LINE_MASK = createMask(FileBits, LineBits);
 const uint64_t Location::COLUMN_MASK = createMask(FileBits + LineBits, ColumnBits);
 
-String Location::key(Flags<KeyFlag> flags) const
+String Location::toString(Flags<ToStringFlag> flags) const
 {
     if (isNull())
         return String();
@@ -48,7 +50,13 @@ String Location::key(Flags<KeyFlag> flags) const
         extra += ctx.size();
     }
 
-    const Path p = path();
+    Path p = path();
+    if (!(flags & AbsolutePath)) {
+        extern Path currentProjectPath();
+        const Path projectPath = currentProjectPath();
+        if (!projectPath.isEmpty() && p.startsWith(currentProjectPath()))
+            p.remove(0, projectPath.size());
+    }
 
     String ret(p.size() + extra, ' ');
 
@@ -59,7 +67,7 @@ String Location::key(Flags<KeyFlag> flags) const
     return ret;
 }
 
-String Location::context(Flags<KeyFlag> flags) const
+String Location::context(Flags<ToStringFlag> flags) const
 {
     const String code = path().readAll();
     String ret;

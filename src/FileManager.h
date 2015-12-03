@@ -16,12 +16,10 @@ along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 #ifndef FileManager_h
 #define FileManager_h
 
-#include <rct/Path.h>
-#include <rct/Timer.h>
-#include <rct/List.h>
-#include <rct/FileSystemWatcher.h>
-#include "Location.h"
 #include <mutex>
+
+#include "rct/Path.h"
+#include "rct/Timer.h"
 
 class Project;
 class FileManager : public std::enable_shared_from_this<FileManager>

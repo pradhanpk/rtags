@@ -1,6 +1,3 @@
-#ifndef CompletionThread_h
-#define CompletionThread_h
-
 /* This file is part of RTags (http://rtags.net).
 
    RTags is free software: you can redistribute it and/or modify
@@ -16,18 +13,22 @@
    You should have received a copy of the GNU General Public License
    along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
-#include <rct/Thread.h>
+#ifndef CompletionThread_h
+#define CompletionThread_h
+
+#include <clang-c/Index.h>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
-#include <condition_variable>
+
 #include "Location.h"
+#include "rct/Connection.h"
+#include "rct/EmbeddedLinkedList.h"
+#include "rct/Flags.h"
+#include "rct/LinkedList.h"
+#include "rct/Map.h"
+#include "rct/Thread.h"
 #include "Source.h"
-#include <rct/Map.h>
-#include <rct/LinkedList.h>
-#include <clang-c/Index.h>
-#include <rct/Connection.h>
-#include <rct/Flags.h>
-#include <rct/EmbeddedLinkedList.h>
 
 class CompletionThread : public Thread
 {
@@ -86,15 +87,18 @@ private:
     };
 
     void printCompletions(const List<Completions::Candidate> &completions, Request *request);
-    static int compareCompletionCandidates(const void *left, const void *right);
+    static bool compareCompletionCandidates(Completions::Candidate *l,
+                                            Completions::Candidate *r);
 
     struct SourceFile {
         SourceFile()
-            : translationUnit(0), unsavedHash(0), lastModified(0), next(0), prev(0)
+            : translationUnit(0), unsavedHash(0), lastModified(0),
+              parseTime(0), reparseTime(0), codeCompleteTime(0), completions(0), next(0), prev(0)
         {}
         CXTranslationUnit translationUnit;
         size_t unsavedHash;
-        uint64_t lastModified; // ms
+        uint64_t lastModified, parseTime, reparseTime, codeCompleteTime; // ms
+        size_t completions;
         Source source;
         Map<Location, Completions*> completionsMap;
         EmbeddedLinkedList<Completions*> completionsList;

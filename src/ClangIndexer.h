@@ -16,27 +16,28 @@
 #ifndef ClangIndexer_h
 #define ClangIndexer_h
 
-#include <rct/StopWatch.h>
-#include <rct/Hash.h>
-#include <rct/Serializer.h>
-#include <rct/Path.h>
-#include <rct/Connection.h>
 #include <sys/stat.h>
+
 #include "IndexDataMessage.h"
-#include "IndexerJob.h"
-#include "RTagsClang.h"
-#include "Symbol.h"
+#include "rct/Hash.h"
+#include "rct/Path.h"
+#include "rct/StopWatch.h"
+#include "RTags.h"
 #include "Server.h"
+#include "Symbol.h"
 
 struct Unit;
 class ClangIndexer
 {
 public:
+    static const CXSourceLocation nullLocation;
+    static const CXCursor nullCursor;
+
     ClangIndexer();
     ~ClangIndexer();
 
     bool exec(const String &data);
-    static uint32_t serverOpts() { return sServerOpts; }
+    static Flags<Server::Option> serverOpts() { return sServerOpts; }
 private:
     bool diagnose();
     bool visit();
@@ -45,6 +46,8 @@ private:
 
     void addFileSymbol(uint32_t file);
     int symbolLength(CXCursorKind kind, const CXCursor &cursor);
+    void addArguments(Symbol *sym, const CXCursor &cursor);
+
     inline Location createLocation(const CXSourceLocation &location, bool *blocked = 0)
     {
         CXString fileName;
@@ -105,10 +108,10 @@ private:
     }
     inline Location createLocation(const CXCursor &cursor, bool *blocked = 0)
     {
-        const CXSourceRange range = clang_Cursor_getSpellingNameRange(cursor, 0, 0);
-        if (clang_Range_isNull(range))
+        const CXSourceLocation location = clang_getCursorLocation(cursor);
+        if (clang_equalLocations(location, nullLocation))
             return Location();
-        return createLocation(clang_getRangeStart(range), blocked);
+        return createLocation(location, blocked);
     }
     Location createLocation(const Path &file, unsigned int line, unsigned int col, bool *blocked = 0);
     String addNamePermutations(const CXCursor &cursor,
@@ -149,7 +152,12 @@ private:
     }
     std::shared_ptr<Unit> unit(const Location &loc) { return unit(loc.fileId()); }
 
-    Symbol findSymbol(const Location &location, bool *ok) const;
+    enum FindResult {
+        Found,
+        NotIndexed,
+        NotFound
+    };
+    Symbol findSymbol(const Location &location, FindResult *result) const;
 
     Hash<uint32_t, std::shared_ptr<Unit> > mUnits;
 
@@ -169,11 +177,14 @@ private:
     int mParseDuration, mVisitDuration, mBlocked, mAllowed,
         mIndexed, mVisitFileTimeout, mIndexDataMessageTimeout, mFileIdsQueried;
     UnsavedFiles mUnsavedFiles;
+    List<String> mDebugLocations;
     FILE *mLogFile;
     std::shared_ptr<Connection> mConnection;
     uint32_t mLastFileId;
     bool mLastBlocked;
     Path mLastFile;
+    Path mDataDir;
+    bool mUnionRecursion;
 
     static Flags<Server::Option> sServerOpts;
 };

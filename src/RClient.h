@@ -16,11 +16,12 @@ along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 #ifndef RClient_h
 #define RClient_h
 
-#include <rct/List.h>
-#include <rct/String.h>
-#include <rct/Hash.h>
-#include <rct/Path.h>
 #include "QueryMessage.h"
+#include "rct/List.h"
+#include "rct/Message.h"
+#include "rct/Path.h"
+#include "rct/Set.h"
+#include "rct/String.h"
 
 class RCCommand;
 class QueryCommand;
@@ -32,8 +33,10 @@ public:
         None = 0,
         AbsolutePath,
         AllReferences,
+        AllDependencies,
         AllTargets,
         BuildIndex,
+        CheckIncludes,
         CheckReindex,
         ClassHierarchy,
         Clear,
@@ -43,12 +46,17 @@ public:
         Compile,
         ConnectTimeout,
         ContainingFunction,
+        ContainingFunctionLocation,
         CurrentFile,
+        CurrentProject,
         CursorKind,
+        DebugLocations,
         DeclarationOnly,
         DefinitionOnly,
         DeleteProject,
         Dependencies,
+        DependencyFilter,
+        Diagnose,
         Diagnostics,
         DisplayName,
         DumpCompilationDatabase,
@@ -56,7 +64,7 @@ public:
         DumpFile,
         DumpFileMaps,
         DumpIncludeHeaders,
-        ElispList,
+        Elisp,
         FilterSystemHeaders,
         FindFile,
         FindFilePreferExact,
@@ -87,7 +95,6 @@ public:
         NoColor,
         NoContext,
         NoSortReferencesByInput,
-        NoUnescapeCompileCommands,
         PathFilter,
         PrepareCodeCompleteAt,
         PreprocessFile,
@@ -108,6 +115,7 @@ public:
         SetBuffers,
         Silent,
         SilentQuery,
+        SocketAddress,
         SocketFile,
         Sources,
         Status,
@@ -119,13 +127,11 @@ public:
         SymbolInfoExcludeTargets,
         SynchronousCompletions,
         Timeout,
-        UnescapeCompileCommands,
         UnsavedFile,
         Verbose,
         Version,
         Wait,
         WildcardSymbolNames,
-        XmlDiagnostics,
         NumOptions
     };
 
@@ -144,7 +150,7 @@ public:
     int timeout() const { return mTimeout; }
     int buildIndex() const { return mBuildIndex; }
 
-    const Set<String> &pathFilters() const { return mPathFilters; }
+    const Set<QueryMessage::PathFilter> &pathFilters() const { return mPathFilters; }
     int minOffset() const { return mMinOffset; }
     int maxOffset() const { return mMaxOffset; }
 
@@ -156,6 +162,8 @@ public:
     const Path &currentFile() const { return mCurrentFile; }
 
     String socketFile() const { return mSocketFile; }
+    String tcpHost() const { return mTcpHost; }
+    uint16_t tcpPort() const { return mTcpPort; }
     Path projectRoot() const { return mProjectRoot; }
     Flags<QueryMessage::Flag> queryFlags() const { return mQueryFlags; }
     int terminalWidth() const { return mTerminalWidth; }
@@ -170,25 +178,21 @@ private:
     void addQuitCommand(int exitCode);
 
     void addLog(LogLevel level);
-    enum EscapeMode {
-        Escape_Auto,
-        Escape_Do,
-        Escape_Dont
-    };
-
-    void addCompile(const Path &cwd, const String &args, EscapeMode escapeMode);
-    void addCompile(const Path &dir, EscapeMode escapeMode);
+    void addCompile(const Path &cwd, const String &args);
+    void addCompile(const Path &dir);
 
     Flags<QueryMessage::Flag> mQueryFlags;
     int mMax, mTimeout, mMinOffset, mMaxOffset, mConnectTimeout, mBuildIndex;
     LogLevel mLogLevel;
-    Set<String> mPathFilters, mKindFilters;
+    Set<QueryMessage::PathFilter> mPathFilters;
+    Set<String> mKindFilters;
     UnsavedFiles mUnsavedFiles;
     List<std::shared_ptr<RCCommand> > mCommands;
     List<String> mRdmArgs;
-    String mSocketFile;
+    Path mSocketFile;
     Path mCurrentFile;
-    EscapeMode mEscapeMode;
+    String mTcpHost;
+    uint16_t mTcpPort;
     bool mGuessFlags;
     Path mProjectRoot;
     int mTerminalWidth;
@@ -201,4 +205,3 @@ private:
 };
 
 #endif
-

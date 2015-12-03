@@ -16,11 +16,8 @@ along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 #ifndef FollowLocationJob_h
 #define FollowLocationJob_h
 
-#include <rct/String.h>
-#include <rct/List.h>
-#include "RTags.h"
-#include "QueryJob.h"
 #include "Location.h"
+#include "QueryJob.h"
 
 class FollowLocationJob : public QueryJob
 {

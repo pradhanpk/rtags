@@ -1,6 +1,3 @@
-#ifndef FileMap_h
-#define FileMap_h
-
 /* This file is part of RTags (http://rtags.net).
 
    RTags is free software: you can redistribute it and/or modify
@@ -16,16 +13,18 @@
    You should have received a copy of the GNU General Public License
    along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
+#ifndef FileMap_h
+#define FileMap_h
+
 #include <assert.h>
-#include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <sys/mman.h>
-#include <rct/Serializer.h>
-#include <rct/Rct.h>
-#include <rct/StackBuffer.h>
-#include "Location.h"
+#include <sys/stat.h>
 #include <functional>
+
+#include "Location.h"
+#include "rct/Serializer.h"
 
 template <typename T> inline static int compare(const T &l, const T &r)
 {
@@ -51,18 +50,34 @@ class FileMap
 {
 public:
     FileMap()
-        : mPointer(0), mSize(0), mCount(0), mKeySize(0), mFD(-1)
+        : mPointer(0), mSize(0), mCount(0), mValuesOffset(0), mFD(-1), mOptions(0)
     {}
 
-    void init(const char *pointer, size_t size)
+    ~FileMap()
+    {
+        if (mFD != -1) {
+            assert(mPointer);
+            munmap(const_cast<char*>(mPointer), mSize);
+            if (!(mOptions & NoLock))
+                lock(mFD, Unlock);
+            int ret;
+            eintrwrap(ret, close(mFD));
+        }
+    }
+
+    void init(const char *pointer, uint32_t size)
     {
         mPointer = pointer;
         mSize = size;
-        memcpy(&mCount, mPointer, sizeof(size_t));
-        memcpy(&mKeySize, mPointer + sizeof(size_t), sizeof(size_t));
+        memcpy(&mCount, mPointer, sizeof(uint32_t));
+        memcpy(&mValuesOffset, mPointer + sizeof(uint32_t), sizeof(uint32_t));
     }
 
-    bool load(const Path &path, String *error = 0)
+    enum Options {
+        None = 0x0,
+        NoLock = 0x1
+    };
+    bool load(const Path &path, uint32_t options, String *error = 0)
     {
         eintrwrap(mFD, open(path.constData(), O_RDONLY));
         if (mFD == -1) {
@@ -72,7 +87,7 @@ public:
             }
             return false;
         }
-        if (!lock(mFD, Read)) {
+        if (!(options & NoLock) && !lock(mFD, Read)) {
             if (error) {
                 *error = Rct::strerror();
                 *error << " " << __LINE__;
@@ -110,19 +125,9 @@ public:
             return false;
         }
 
+        mOptions = options;
         init(pointer, st.st_size);
         return true;
-    }
-
-    ~FileMap()
-    {
-        if (mFD != -1) {
-            assert(mPointer);
-            munmap(const_cast<char*>(mPointer), mSize);
-            lock(mFD, Unlock);
-            int ret;
-            eintrwrap(ret, close(mFD));
-        }
     }
 
     Value value(const Key &key, bool *matched = 0) const
@@ -139,23 +144,19 @@ public:
 
     int count() const { return mCount; }
 
-    Key keyAt(size_t index) const
+    Key keyAt(uint32_t index) const
     {
-        const char *ptr = (dataSegment() + (entrySize() * index));
-        return read<Key>(ptr);
+        assert(index >= 0 && index < mCount);
+        return read<Key>(keysSegment(), index);
     }
 
-    Value valueAt(size_t idx) const
+    Value valueAt(uint32_t index) const
     {
-        assert(idx >= 0 && idx < mCount);
-        const char *data = dataSegment() + (entrySize() * idx) + keySize();
-        if (FixedSize<Value>::value)
-            return read<Value>(data);
-
-        const size_t offset = read<size_t>(data);
-        return read<Value>(mPointer + offset);
+        assert(index >= 0 && index < mCount);
+        return read<Value>(valuesSegment(), index);
     }
-    size_t lowerBound(const Key &k, bool *match = 0) const
+
+    uint32_t lowerBound(const Key &k, bool *match = 0) const
     {
         if (!mCount) {
             if (match)
@@ -190,97 +191,78 @@ public:
     {
         String out;
         Serializer serializer(out);
-
-        String values;
-        Serializer valuesSerializer(values);
-        size_t valuesOffset = 0;
-
-        size_t keySize = 0;
-        serializer << static_cast<size_t>(map.size());
-        serializer << static_cast<size_t>(0); // keysize
-
-        auto encodePair = [&out, &valuesSerializer, &values, &valuesOffset](const char *keyData, size_t keySize, const Value &value)
-            {
-                out.append(keyData, keySize);
-                if (const size_t size = FixedSize<Value>::value) {
-                    out.append(reinterpret_cast<const char*>(&value), size);
-                } else {
-                    out.append(reinterpret_cast<const char *>(&valuesOffset), sizeof(valuesOffset));
-                    const int old = values.size();
-                    valuesSerializer << value;
-                    valuesOffset += (values.size() - old);
-                }
-            };
-
-        if (!FixedSize<Key>::value) {
-            List<String> keys(map.size());
-            int idx = 0;
-            for (const auto &pair : map) {
-                String &str = keys[idx++];
-                Serializer s(str);
-                s << pair.first;
-                keySize = std::max<size_t>(str.size(), keySize);
-            }
-            memcpy(out.data() + sizeof(size_t), &keySize, sizeof(keySize));
-            StackBuffer<1024> buf(keySize);
-            size_t entrySize = keySize;
-            if (const size_t size = FixedSize<Value>::value) {
-                entrySize += size;
-            } else {
-                entrySize += sizeof(size_t);
-            }
-            valuesOffset = sizeof(size_t) + sizeof(size_t) + (entrySize * map.size());
-            out.reserve(valuesOffset);
-            idx = 0;
-            for (const auto &pair : map) {
-                memset(buf, 0, keySize);
-                const String &str = keys[idx++];
-                memcpy(buf, str.data(), str.size()); // no need to copy the \0 :-)
-                encodePair(buf, keySize, pair.second);
+        serializer << static_cast<uint32_t>(map.size());
+        uint32_t valuesOffset;
+        if (uint32_t size = FixedSize<Key>::value) {
+            valuesOffset = ((static_cast<uint32_t>(map.size()) * size) + (sizeof(uint32_t) * 2));
+            serializer << valuesOffset;
+            for (const std::pair<Key, Value> &pair : map) {
+                out.append(reinterpret_cast<const char*>(&pair.first), size);
             }
         } else {
-            size_t entrySize = FixedSize<Key>::value;
-            if (const size_t size = FixedSize<Value>::value) {
-                entrySize += size;
-            } else {
-                entrySize += sizeof(size_t);
+            serializer << static_cast<uint32_t>(0); // values offset
+            uint32_t offset = sizeof(uint32_t) * 2 + (map.size() * sizeof(uint32_t));
+            String keyData;
+            Serializer keySerializer(keyData);
+            for (const std::pair<Key, Value> &pair : map) {
+                const uint32_t pos = offset + keyData.size();
+                out.append(reinterpret_cast<const char*>(&pos), sizeof(pos));
+                keySerializer << pair.first;
             }
-            valuesOffset = sizeof(size_t) + sizeof(size_t) + (entrySize * map.size());
-            out.reserve(valuesOffset);
-            for (const auto &pair : map) {
-                // error() << "Encoding a key" << pair.first;
-                encodePair(reinterpret_cast<const char*>(&pair.first), FixedSize<Key>::value, pair.second);
-            }
+            out.append(keyData);
+            valuesOffset = out.size();
+            memcpy(out.data() + sizeof(uint32_t), &valuesOffset, sizeof(valuesOffset));
         }
+        assert(valuesOffset == static_cast<uint32_t>(out.size()));
 
-        if (!FixedSize<Value>::value)
-            out += values;
+        if (uint32_t size = FixedSize<Value>::value) {
+            for (const std::pair<Key, Value> &pair : map) {
+                out.append(reinterpret_cast<const char*>(&pair.second), size);
+            }
+        } else {
+            const uint32_t encodedValuesOffset = valuesOffset + (sizeof(uint32_t) * map.size());
+            String valueData;
+            Serializer valueSerializer(valueData);
+            for (const std::pair<Key, Value> &pair : map) {
+                const uint32_t pos = encodedValuesOffset + valueData.size();
+                out.append(reinterpret_cast<const char*>(&pos), sizeof(pos));
+                valueSerializer << pair.second;
+            }
+            out.append(valueData);
+
+        }
         return out;
     }
-
-    static bool write(const Path &path, const Map<Key, Value> &map)
+    static bool write(const Path &path, const Map<Key, Value> &map, uint32_t options)
     {
-        FILE *f = fopen(path.constData(), "w+");
-        if (!f && Path::mkdir(path.parentDir(), Path::Recursive)) {
-            f = fopen(path.constData(), "w+");
+        int fd = open(path.constData(), O_RDWR|O_CREAT, 0644);
+        if (fd == -1) {
+            if (!Path::mkdir(path.parentDir(), Path::Recursive))
+                return false;
+            fd = open(path.constData(), O_RDWR|O_CREAT, 0644);
+            if (fd == -1)
+                return false;
         }
-        if (!f)
+        if (!(options & NoLock) && !lock(fd, Write)) {
+            ::close(fd);
             return false;
-        int err;
-        const int fd = fileno(f);
-        if (!lock(fd, Write)) {
-            fclose(f);
+        }
+        const String data = encode(map);
+        bool ret = ::ftruncate(fd, data.size()) != -1;
+        if (!ret) {
+            if (!(options & NoLock))
+                lock(fd, Unlock);
+            ::close(fd);
             return false;
         }
 
-        const String data = encode(map);
-        bool ret = fwrite(data.constData(), data.size(), 1, f);
-        if (ret)
-            eintrwrap(err, ftruncate(fd, data.size()));
-        ret = lock(fd, Unlock) && ret;
-        fclose(f);
+        ret = ::write(fd, data.constData(), data.size()) == data.size();
+        if (!(options & NoLock))
+            ret = lock(fd, Unlock) && ret;
+
+        ::close(fd);
         if (!ret)
-            unlink(data.constData());
+            unlink(path.constData());
         return ret;
     }
 private:
@@ -291,41 +273,40 @@ private:
     };
     static bool lock(int fd, Mode mode)
     {
-        struct flock fl = { 0, 0, getpid(), static_cast<short>(mode), SEEK_SET };
+        struct flock fl;
+        memset(&fl, 0, sizeof(fl));
+        fl.l_type = mode;
+        fl.l_whence = SEEK_SET;
+        fl.l_pid = getpid();
         int ret;
         eintrwrap(ret, fcntl(fd, F_SETLKW, &fl));
         return ret != -1;
     }
-    const char *dataSegment() const { return mPointer + sizeof(size_t) + sizeof(size_t); }
+    const char *valuesSegment() const { return mPointer + mValuesOffset; }
+    const char *keysSegment() const { return mPointer + (sizeof(uint32_t) * 2); }
 
     template <typename T>
-    inline static T read(const char *data)
+    inline T read(const char *base, uint32_t index) const
     {
-        if (FixedSize<T>::value) {
+        if (const uint32_t size = FixedSize<T>::value) {
             T t = T();
-            memcpy(&t, data, FixedSize<T>::value);
+            memcpy(&t, base + (index * size), FixedSize<T>::value);
             return t;
         }
-        Deserializer deserializer(data, INT_MAX);
+        uint32_t offset;
+        memcpy(&offset, base + (sizeof(uint32_t) * index), sizeof(offset));
+        Deserializer deserializer(mPointer + offset, INT_MAX);
         T t;
         deserializer >> t;
         return t;
     }
-    size_t keySize() const { return mKeySize ? mKeySize : FixedSize<Key>::value; }
-    size_t entrySize() const
-    {
-        if (FixedSize<Value>::value) {
-            return keySize() + sizeof(Value);
-        } else {
-            return keySize() + sizeof(size_t);
-        }
-    }
 
-    const char *mPointer;
-    size_t mSize;
-    size_t mCount;
-    size_t mKeySize;
+const char *mPointer;
+    uint32_t mSize;
+    uint32_t mCount;
+    uint32_t mValuesOffset;
     int mFD;
+    uint32_t mOptions;
 };
 
 #endif

@@ -16,11 +16,10 @@ along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 #ifndef IndexMessage_h
 #define IndexMessage_h
 
-#include <rct/List.h>
-#include <rct/String.h>
+#include "rct/Flags.h"
+#include "rct/List.h"
+#include "rct/String.h"
 #include "RTagsMessage.h"
-#include "RTags.h"
-#include <rct/Flags.h>
 
 class IndexMessage : public RTagsMessage
 {
@@ -41,8 +40,7 @@ public:
     void setArguments(const String &arguments) { mArgs = arguments; }
     enum Flag {
         None = 0x0,
-        Escape = 0x1,
-        GuessFlags = 0x2
+        GuessFlags = 0x1
     };
     Flags<Flag> flags() const { return mFlags; }
     void setFlags(Flags<Flag> flags) { mFlags = flags; }

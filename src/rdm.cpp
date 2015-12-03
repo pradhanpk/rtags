@@ -13,13 +13,6 @@
    You should have received a copy of the GNU General Public License
    along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
-#include <rct/EventLoop.h>
-#include <rct/Log.h>
-#include "RTags.h"
-#include "Server.h"
-#include <rct/Rct.h>
-#include <rct/Thread.h>
-#include <rct/ThreadPool.h>
 #include <getopt.h>
 #include <signal.h>
 #include <stdio.h>
@@ -28,7 +21,16 @@
 #include <sys/resource.h>
 #endif
 
-#include <rct/FileSystemWatcher.h>
+#include "rct/EventLoop.h"
+#include "rct/FileSystemWatcher.h"
+#include "rct/Log.h"
+#include "rct/Process.h"
+#include "rct/Rct.h"
+#include "rct/StackBuffer.h"
+#include "rct/Thread.h"
+#include "rct/ThreadPool.h"
+#include "RTags.h"
+#include "Server.h"
 
 #if !defined(HAVE_FSEVENTS) && defined(HAVE_KQUEUE)
 #define FILEMANAGER_OPT_IN
@@ -74,6 +76,7 @@ static void usage(FILE *f)
             "  --test|-t [arg]                            Run this test.\n"
             "  --test-timeout|-z [arg]                    Timeout for test to complete.\n"
             "  --completion-cache-size|-i [arg]           Number of translation units to cache (default " STR(DEFAULT_COMPLETION_CACHE_SIZE) ").\n"
+            "  --completion-no-filter                     Don't filter private members and destructors from completions.\n"
             "  --config|-c [arg]                          Use this file instead of ~/.rdmrc.\n"
             "  --data-dir|-d [arg]                        Use this directory to store persistent data (default ~/.rtags).\n"
             "  --daemon                                   Run as daemon (detach from terminal).\n"
@@ -89,27 +92,31 @@ static void usage(FILE *f)
 #else
             "  --no-filemanager-watch|-M                  Don't use a file system watcher for filemanager.\n"
 #endif
-
-         "  --job-count|-j [arg]                       Spawn this many concurrent processes for indexing (default %d).\n"
+            "  --watch-sources-only                       Only watch source files (not dependencies).\n"
+            "  --job-count|-j [arg]                       Spawn this many concurrent processes for indexing (default %d).\n"
             "  --header-error-job-count|-H [arg]          Allow this many concurrent header error jobs (default std::max(1, --job-count / 2)).\n"
             "  --log-file|-L [arg]                        Log to this file.\n"
-
+            "  --log-file-log-level [arg]                 Log level for log file (default is error):\n"
+            "                                             options are: error, warning, debug or verbose-debug.\n"
 #ifndef OS_FreeBSD
 #endif
             "  --no-filesystem-watcher|-B                 Disable file system watching altogether. Reindexing has to happen manually.\n"
+            "  --no-file-lock                             Disable file locking. Not entirely safe but might improve performance on certain systems.\n"
             "  --no-rc|-N                                 Don't load any rc files.\n"
             "  --no-startup-project|-o                    Don't restore the last current project on startup.\n"
             "  --rp-connect-timeout|-O [arg]              Timeout for connection from rp to rdm in ms (0 means no timeout) (default " STR(DEFAULT_RP_CONNECT_TIMEOUT) ").\n"
             "  --rp-connect-attempts [arg]                Number of times rp attempts to connect to rdm before giving up. (default " STR(DEFAULT_RP_CONNECT_ATTEMPTS) ").\n"
             "  --rp-indexer-message-timeout|-T [arg]      Timeout for rp indexer-message in ms (0 means no timeout) (default " STR(DEFAULT_RP_INDEXER_MESSAGE_TIMEOUT) ").\n"
-            "  --rp-nice-value|-a [arg]                   Nice value to use for rp (nice(2)) (default -1, e.g. not nicing).\n"
+            "  --rp-nice-value|-a [arg]                   Nice value to use for rp (nice(2)) (default is no nicing).\n"
             "  --rp-visit-file-timeout|-Z [arg]           Timeout for rp visitfile commands in ms (0 means no timeout) (default " STR(DEFAULT_RP_VISITFILE_TIMEOUT) ").\n"
             "  --separate-debug-and-release|-E            Normally rdm doesn't consider release and debug as different builds. Pass this if you want it to.\n"
             "  --setenv|-e [arg]                          Set this environment variable (--setenv \"foobar=1\").\n"
             "  --silent|-S                                No logging to stdout.\n"
             "  --socket-file|-n [arg]                     Use this file for the server socket (default ~/.rdm).\n"
+            "  --tcp-port [arg]                        Listen on this tcp socket (default none).\n"
             "  --start-suspended|-Q                       Start out suspended (no reindexing enabled).\n"
-            "  --suspend-rp-on-crash|-q [arg]             Suspend rp in SIGSEGV handler (default " DEFAULT_SUSPEND_RP ").\n"
+            "  --suspend-rp-on-crash|-q                   Suspend rp in SIGSEGV handler (default " DEFAULT_SUSPEND_RP ").\n"
+            "  --rp-log-to-syslog                         Make rp log to syslog\n"
             "  --thread-stack-size|-k [arg]               Set stack size for threadpool to this (default %zu).\n"
             "  --verbose|-v                               Change verbosity, multiple -v's are allowed.\n"
             "  --watch-system-paths|-w                    Watch system paths for changes.\n"
@@ -118,9 +125,7 @@ static void usage(FILE *f)
 #ifdef OS_Darwin
             "  --launchd                                  Run as a launchd job (use launchd API to retrieve socket opened by launchd on rdm's behalf).\n"
 #endif
-            // This only really makes sense if you're using --launchd.
-            // But the code isn't OS X-specific, strictly speaking.
-            "  --inactivity-timeout [arg]                 Time in seconds after which launchd will quit if there's been no activity (N.B., once rdm has quit, something will need to re-run it!).\n"
+            "  --inactivity-timeout [arg]                 Time in seconds after which rdm will quit if there's been no activity (N.B., once rdm has quit, something will need to re-run it!).\n"
             "\nCompiling/Indexing options:\n"
             "  --allow-Wpedantic|-P                       Don't strip out -Wpedantic. This can cause problems in certain projects.\n"
             "  --define|-D [arg]                          Add additional define directive to clang.\n"
@@ -136,6 +141,8 @@ static void usage(FILE *f)
             "  --max-file-map-cache-size|-y [arg]         Max files to cache per query (Should not exceed maximum number of open file descriptors allowed per process) (default " STR(DEFAULT_RDM_MAX_FILE_MAP_CACHE_SIZE) ").\n"
             "  --no-comments                              Don't parse/store doxygen comments.\n"
             "  --arg-transform|-V [arg]                   Use arg to transform arguments. [arg] should be a executable with (execv(3)).\n"
+            "  --debug-locations [arg]                    Set debug locations.\n"
+            "  --pch-enabled                              Enable PCH (experimental).\n"
             , std::max(2, ThreadPool::idealThreadCount()), defaultStackSize);
 }
 
@@ -165,7 +172,7 @@ int main(int argc, char** argv)
 
     struct option opts[] = {
         { "help", no_argument, 0, 'h' },
-        { "version", no_argument, 0, '\2' },
+        { "version", no_argument, 0, 2 },
         { "include-path", required_argument, 0, 'I' },
         { "isystem", required_argument, 0, 's' },
         { "define", required_argument, 0, 'D' },
@@ -200,14 +207,16 @@ int main(int argc, char** argv)
         { "rp-visit-file-timeout", required_argument, 0, 'Z' },
         { "rp-indexer-message-timeout", required_argument, 0, 'T' },
         { "rp-connect-timeout", required_argument, 0, 'O' },
-        { "rp-connect-attempts", required_argument, 0, '\3' },
+        { "rp-connect-attempts", required_argument, 0, 3 },
         { "rp-nice-value", required_argument, 0, 'a' },
         { "thread-stack-size", required_argument, 0, 'k' },
         { "suspend-rp-on-crash", no_argument, 0, 'q' },
+        { "rp-log-to-syslog", no_argument, 0, 7 },
         { "start-suspended", no_argument, 0, 'Q' },
         { "separate-debug-and-release", no_argument, 0, 'E' },
         { "max-crash-count", required_argument, 0, 'K' },
         { "completion-cache-size", required_argument, 0, 'i' },
+        { "completion-no-filter", no_argument, 0, 8 },
         { "extra-compilers", required_argument, 0, 'U' },
         { "allow-Wpedantic", no_argument, 0, 'P' },
         { "enable-compiler-manager", no_argument, 0, 'R' },
@@ -219,14 +228,20 @@ int main(int argc, char** argv)
 #else
         { "no-filemanager-watch", no_argument, 0, 'M' },
 #endif
+        { "no-file-lock", no_argument, 0, 13 },
+        { "pch-enabled", no_argument, 0, 14 },
         { "no-filesystem-watcher", no_argument, 0, 'B' },
         { "arg-transform", required_argument, 0, 'V' },
-        { "no-comments", no_argument, 0, '\1' },
+        { "no-comments", no_argument, 0, 1 },
 #ifdef OS_Darwin
-        { "launchd", no_argument, 0, '\4' },
+        { "launchd", no_argument, 0, 4 },
 #endif
-        { "inactivity-timeout", required_argument, 0, '\5' },
-        { "daemon", no_argument, 0, '\6' },
+        { "inactivity-timeout", required_argument, 0, 5 },
+        { "daemon", no_argument, 0, 6 },
+        { "log-file-log-level", required_argument, 0, 9 },
+        { "watch-sources-only", no_argument, 0, 10 },
+        { "debug-locations", no_argument, 0, 11 },
+        { "tcp-port", required_argument, 0, 12 },
         { 0, 0, 0, 0 }
     };
     const String shortOptions = Rct::shortOptions(opts);
@@ -350,9 +365,10 @@ int main(int argc, char** argv)
     serverOpts.dataDir = String::format<128>("%s.rtags", Path::home().constData());
 
     const char *logFile = 0;
-    Flags<LogFileFlag> logFlags;
+    Flags<LogFileFlag> logFlags = DontRotate;
     LogLevel logLevel(LogLevel::Error);
-    bool sigHandler = false;
+    LogLevel logFileLogLevel(LogLevel::Error);
+    bool sigHandler = true;
     assert(Path::home().endsWith('/'));
     int argCount = argList.size();
     char **args = argList.data();
@@ -377,15 +393,53 @@ int main(int argc, char** argv)
         case 'G':
             serverOpts.blockedArguments << optarg;
             break;
-        case '\1':
+        case 1:
             serverOpts.options |= Server::NoComments;
             break;
-        case '\2':
+        case 10:
+            serverOpts.options |= Server::WatchSourcesOnly;
+            break;
+        case 11:
+            if (!strcmp(optarg, "clear") || !strcmp(optarg, "none")) {
+                serverOpts.debugLocations.clear();
+            } else {
+                serverOpts.debugLocations << optarg;
+            }
+            break;
+        case 12:
+            serverOpts.tcpPort = atoi(optarg);
+            if (!serverOpts.tcpPort) {
+                fprintf(stderr, "Invalid port %s for --tcp-port\n", optarg);
+                return 1;
+            }
+            break;
+        case 13:
+            serverOpts.options |= Server::NoFileLock;
+            break;
+        case 14:
+            serverOpts.options |= Server::PCHEnabled;
+            break;
+        case 2:
             fprintf(stdout, "%s\n", RTags::versionString().constData());
             return 0;
-        case '\6':
+        case 6:
             daemon = true;
             logLevel = LogLevel::None;
+            break;
+        case 9:
+            if (!strcasecmp(optarg, "verbose-debug")) {
+                logFileLogLevel = LogLevel::VerboseDebug;
+            } else if (!strcasecmp(optarg, "debug")) {
+                logFileLogLevel = LogLevel::Debug;
+            } else if (!strcasecmp(optarg, "warning")) {
+                logFileLogLevel = LogLevel::Warning;
+            } else if (!strcasecmp(optarg, "error")) {
+                logFileLogLevel = LogLevel::Error;
+            } else {
+                fprintf(stderr, "Unknown log level: %s options are error, warning, debug or verbose-debug\n",
+                        optarg);
+                return 1;
+            }
             break;
         case 'U':
             serverOpts.extraCompilers.append(std::regex(optarg));
@@ -422,7 +476,7 @@ int main(int argc, char** argv)
                 return 1;
             }
             break;
-        case '\3':
+        case 3:
             serverOpts.rpConnectAttempts = atoi(optarg);
             if (serverOpts.rpConnectAttempts <= 0) {
                 fprintf(stderr, "Invalid argument to --rp-connect-attempts %s\n", optarg);
@@ -600,22 +654,29 @@ int main(int argc, char** argv)
             break;
         case 'L':
             logFile = optarg;
+            logLevel = LogLevel::None;
             break;
         case 'v':
             if (logLevel != LogLevel::None)
                 ++logLevel;
             break;
 #ifdef OS_Darwin
-        case '\4':
+        case 4:
             serverOpts.options |= Server::Launchd;
             break;
 #endif
-        case '\5':
+        case 5:
             inactivityTimeout = atoi(optarg); // seconds.
             if (inactivityTimeout <= 0) {
                 fprintf(stderr, "Invalid argument to --inactivity-timeout %s\n", optarg);
                 return 1;
             }
+            break;
+        case 7:
+            serverOpts.options |= Server::RPLogToSyslog;
+            break;
+        case 8:
+            serverOpts.options |= Server::CompletionsNoFilter;
             break;
         case '?': {
             fprintf(stderr, "Run rdm --help for help\n");
@@ -664,7 +725,7 @@ int main(int argc, char** argv)
     // Shell-expand logFile
     Path logPath(logFile); logPath.resolve();
 
-    if (!initLogging(argv[0], LogStderr, logLevel, logPath.constData(), logFlags)) {
+    if (!initLogging(argv[0], LogStderr, logLevel, logPath.constData(), logFlags, logFileLogLevel)) {
         fprintf(stderr, "Can't initialize logging with %d %s %s\n",
                 logLevel.toInt(), logFile ? logFile : "", logFlags.toString().constData());
         return 1;

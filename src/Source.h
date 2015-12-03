@@ -17,11 +17,12 @@
 #define Source_h
 
 #include <cstdint>
-#include <rct/Path.h>
-#include <rct/Serializer.h>
-#include <rct/List.h>
-#include <rct/Flags.h>
+
 #include "Location.h"
+#include "rct/Flags.h"
+#include "rct/List.h"
+#include "rct/Path.h"
+#include "rct/Serializer.h"
 
 struct Source
 {
@@ -56,16 +57,17 @@ struct Source
     Flags<Flag> flags;
 
     enum CommandLineFlag {
-        IncludeCompiler = 0x001,
-        IncludeSourceFile = 0x002,
-        IncludeDefines = 0x004,
-        IncludeIncludepaths = 0x008,
-        QuoteDefines = 0x010,
-        FilterBlacklist = 0x020,
-        ExcludeDefaultArguments = 0x040,
-        ExcludeDefaultIncludePaths = 0x080,
-        ExcludeDefaultDefines = 0x100,
-        IncludeRTagsConfig = 0x200,
+        IncludeExtraCompiler = 0x001,
+        IncludeCompiler = 0x002|IncludeExtraCompiler,
+        IncludeSourceFile = 0x004,
+        IncludeDefines = 0x008,
+        IncludeIncludepaths = 0x010,
+        QuoteDefines = 0x020,
+        FilterBlacklist = 0x040,
+        ExcludeDefaultArguments = 0x080,
+        ExcludeDefaultIncludePaths = 0x100,
+        ExcludeDefaultDefines = 0x200,
+        IncludeRTagsConfig = 0x400,
         Default = IncludeDefines|IncludeIncludepaths|FilterBlacklist|IncludeRTagsConfig
     };
 
@@ -99,6 +101,7 @@ struct Source
             Type_Framework,
             Type_System,
             Type_SystemFramework,
+            Type_PCH
         };
         Include(Type t = Type_None, const Path &p = Path())
             : type(t), path(p)
@@ -114,6 +117,7 @@ struct Source
             case Type_Framework: return String::format<128>("-F%s", path.constData());
             case Type_System: return String::format<128>("-isystem %s", path.constData());
             case Type_SystemFramework: return String::format<128>("-iframework %s", path.constData());
+            case Type_PCH: return String::format<128>("-include-pch %s", path.constData());
             case Type_None: break;
             }
             return String();
@@ -121,10 +125,10 @@ struct Source
 
         inline int compare(const Source::Include &other) const
         {
-            if (type == other.type) {
-                return path.compare(other.path);
+            if (type != other.type) {
+                return type < other.type ? -1 : 1;
             }
-            return type < other.type;
+            return path.compare(other.path);
         }
 
         inline bool operator==(const Include &other) const { return !compare(other); }
@@ -173,19 +177,13 @@ struct Source
     String toString() const;
     Path sysRoot() const { return arguments.value(sysRootIndex, "/"); }
 
-    enum ParseFlag {
-        None = 0x0,
-        Escape = 0x1
-    };
     static List<Source> parse(const String &cmdLine,
-                              Flags<ParseFlag> parseFlags,
                               const Path &pwd,
                               const List<Path> &pathEnvironment,
                               List<Path> *unresolvedInputLocation = 0);
 };
 
 RCT_FLAGS(Source::Flag);
-RCT_FLAGS(Source::ParseFlag);
 RCT_FLAGS(Source::CommandLineFlag);
 
 inline Source::Source()
@@ -223,6 +221,9 @@ inline bool Source::isIndexable(Language lang)
     case CPlusPlus11:
     case ObjectiveC:
     case ObjectiveCPlusPlus:
+    case CPlusPlus11Header:
+    case CPlusPlusHeader:
+    case CHeader:
         return true;
     default:
         break;
@@ -319,7 +320,8 @@ template <> inline Deserializer &operator>>(Deserializer &s, Source::Include &d)
 
 template <> inline Serializer &operator<<(Serializer &s, const Source &b)
 {
-    s << b.sourceFile() << b.fileId << b.compilerId << b.extraCompiler << b.buildRootId
+    s << b.sourceFile() << b.fileId << b.compiler() << b.compilerId
+      << b.extraCompiler << b.buildRoot() << b.buildRootId
       << static_cast<uint8_t>(b.language) << b.parsed << b.flags << b.defines
       << b.includePaths << b.arguments << b.sysRootIndex << b.directory << b.includePathHash;
     return s;
@@ -329,11 +331,14 @@ template <> inline Deserializer &operator>>(Deserializer &s, Source &b)
 {
     b.clear();
     uint8_t language;
-    Path path;
-    s >> path >> b.fileId >> b.compilerId >> b.extraCompiler >> b.buildRootId
-      >> language >> b.parsed >> b.flags >> b.defines >> b.includePaths
-      >> b.arguments >> b.sysRootIndex >> b.directory >> b.includePathHash;
-    Location::set(path, b.fileId);
+    Path source, compiler, buildRoot;
+    s >> source >> b.fileId >> compiler >> b.compilerId >> b.extraCompiler
+      >> buildRoot >> b.buildRootId >> language >> b.parsed >> b.flags
+      >> b.defines >> b.includePaths >> b.arguments >> b.sysRootIndex
+      >> b.directory >> b.includePathHash;
+    Location::set(source, b.fileId);
+    Location::set(compiler, b.compilerId);
+    Location::set(buildRoot, b.buildRootId);
     b.language = static_cast<Source::Language>(language);
     return s;
 }

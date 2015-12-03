@@ -14,7 +14,12 @@
    along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
 #include "JobScheduler.h"
+
+#include "IndexDataMessage.h"
+#include "IndexerJob.h"
 #include "Project.h"
+#include "rct/Connection.h"
+#include "rct/Process.h"
 #include "Server.h"
 
 enum { MaxPriority = 10 };
@@ -36,7 +41,7 @@ JobScheduler::~JobScheduler()
 void JobScheduler::add(const std::shared_ptr<IndexerJob> &job)
 {
     assert(!(job->flags & ~IndexerJob::Type_Mask));
-    std::shared_ptr<Node> node(new Node({ job, 0, 0, 0 }));
+    std::shared_ptr<Node> node(new Node({ job, 0, 0, 0, String() }));
     node->job = job;
     // error() << job->priority << job->sourceFile << mProcrastination;
     if (mPendingJobs.isEmpty() || job->priority > mPendingJobs.first()->job->priority) {
@@ -299,6 +304,9 @@ void JobScheduler::abort(const std::shared_ptr<IndexerJob> &job)
 {
     assert(!(job->flags & IndexerJob::Aborted));
     job->flags |= IndexerJob::Aborted;
+    if (job->flags & IndexerJob::Crashed) {
+        return;
+    }
     job->flags &= ~IndexerJob::Running;
     auto node = mActiveById.take(job->id);
     if (!node) {
@@ -325,8 +333,6 @@ void JobScheduler::clearHeaderError(uint32_t file)
 // ### This is a linear lookup
 bool JobScheduler::increasePriority(uint32_t fileId)
 {
-    warning() << "Looking for" << Location::path(fileId);
-
     for (auto node = mPendingJobs.first(); node; node = node->next) {
         if (node->job->source.fileId == fileId) {
             if (node->job->priority != IndexerJob::HeaderError) {
@@ -341,11 +347,10 @@ bool JobScheduler::increasePriority(uint32_t fileId)
 
     for (auto pair : mActiveByProcess) {
         if (pair.second->job->source.fileId == fileId) {
-            warning() << Location::path(fileId) << "is already running";
+            warning() << Location::path(fileId) << "is already running, no need to bump priority";
             return true;
         }
     }
-    warning() << "Failed to find node for" << Location::path(fileId);
+    debug() << Location::path(fileId) << "is not currently indexing";
     return false;
 }
-

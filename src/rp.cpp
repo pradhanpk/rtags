@@ -14,16 +14,17 @@
    along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
 #define RTAGS_SINGLE_THREAD
-#include "ClangIndexer.h"
-#include "RTagsClang.h"
-#include "Source.h"
-#include "Project.h"
-#include <rct/Log.h>
-#include <rct/StopWatch.h>
-#include <rct/String.h>
 #include <signal.h>
 #include <syslog.h>
+
+#include "ClangIndexer.h"
+#include "Project.h"
+#include "rct/Log.h"
+#include "rct/StopWatch.h"
+#include "rct/String.h"
+#include "RTags.h"
 #include "Server.h"
+#include "Source.h"
 
 static void sigHandler(int signal)
 {
@@ -46,18 +47,13 @@ static void sigHandler(int signal)
     _exit(1);
 }
 
-// externed in files that are shared by rdm and rc
-const Server::Options *serverOptions() { return 0; }
-void saveFileIds() {}
-
-Set<Symbol> findTargets(const std::shared_ptr<Project> &, const Symbol &) { return Set<Symbol>(); }
-Set<Symbol> findCallers(const std::shared_ptr<Project> &, const Symbol &) { return Set<Symbol>(); }
-String findSymbolNameByUsr(const std::shared_ptr<Project> &, uint32_t, const String &) { return String(); }
-
 struct SyslogCloser
 {
 public:
-    ~SyslogCloser() { ::closelog(); }
+    ~SyslogCloser()
+    {
+        ::closelog();
+    }
 };
 
 int main(int argc, char **argv)
@@ -77,8 +73,13 @@ int main(int argc, char **argv)
     signal(SIGABRT, sigHandler);
     signal(SIGBUS, sigHandler);
 
-    initLogging(argv[0], LogStderr|LogSyslog, logLevel);
-    SyslogCloser closer;
+    Flags<LogMode> logType = LogStderr;
+    std::shared_ptr<SyslogCloser> closer;
+    if (ClangIndexer::serverOpts() & Server::RPLogToSyslog) {
+        logType |= LogSyslog;
+        closer.reset(new SyslogCloser);
+    }
+    initLogging(argv[0], logType, logLevel);
     (void)closer;
 
     RTags::initMessages();

@@ -16,16 +16,14 @@
 #ifndef Location_h
 #define Location_h
 
-#include <rct/String.h>
-#include <rct/Log.h>
-#include <rct/Path.h>
-#include <rct/Serializer.h>
+#include <algorithm>
 #include <assert.h>
 #include <clang-c/Index.h>
 #include <stdio.h>
-#include <rct/Flags.h>
 #if defined(OS_Linux)
 #include <linux/limits.h>
+#elif defined(OS_Darwin)
+#include <sys/syslimits.h>
 #endif
 #ifndef RTAGS_SINGLE_THREAD
 #include <mutex>
@@ -33,6 +31,12 @@
 #else
 #define LOCK() do {} while (0)
 #endif
+
+#include "rct/Flags.h"
+#include "rct/Log.h"
+#include "rct/Path.h"
+#include "rct/Serializer.h"
+#include "rct/String.h"
 
 static inline int intCompare(uint32_t l, uint32_t r)
 {
@@ -84,8 +88,9 @@ public:
     {
         bool save = false;
         (void)save;
+        assert(path.isAbsolute());
         assert(!path.contains(".."));
-        assert(path.resolved() == path);
+        // in the case of Source::compilerId path can be a symlink
         uint32_t ret;
         {
             LOCK();
@@ -121,16 +126,6 @@ public:
     inline bool isNull() const { return !value; }
     inline bool isValid() const { return value; }
     inline void clear() { value = 0; mCachedPath.clear(); }
-    inline bool operator==(const String &str) const
-    {
-        const Location fromPath = Location::fromPathLineAndColumn(str);
-        return operator==(fromPath);
-    }
-    inline bool operator!=(const String &str) const
-    {
-        const Location fromPath = Location::fromPathLineAndColumn(str);
-        return operator!=(fromPath);
-    }
     inline bool operator==(const Location &other) const { return value == other.value; }
     inline bool operator!=(const Location &other) const { return value != other.value; }
     inline int compare(const Location &other) const
@@ -153,19 +148,21 @@ public:
         return compare(other) > 0;
     }
 
-    enum KeyFlag {
+    enum ToStringFlag {
         NoFlag = 0x0,
         ShowContext = 0x1,
-        NoColor = 0x2
+        NoColor = 0x2,
+        AbsolutePath = 0x4
     };
 
-    String key(Flags<KeyFlag> flags = NoFlag) const;
-    String context(Flags<KeyFlag> flags) const;
+    String toString(Flags<ToStringFlag> flags = NoFlag) const;
+    String context(Flags<ToStringFlag> flags) const;
 
     enum DecodeFlag {
         NoDecodeFlag = 0x0,
         CreateLocation = 0x1
     };
+
     static Location decode(const String &data, DecodeFlag flag = NoDecodeFlag)
     {
         uint32_t col;
@@ -189,10 +186,12 @@ public:
     {
         char path[PATH_MAX];
         uint32_t line, col;
-        if (sscanf(key.constData(), "%[^':']:%d:%d", path, &line, &col) != 3)
+        if (sscanf(key.constData(), "%[^':']:%u:%u", path, &line, &col) != 3)
             return String();
 
         Path resolved = Path::resolved(path, Path::MakeAbsolute, pwd);
+        if (!resolved.isFile())
+            return String();
         {
             char buf[8];
             memcpy(buf, &line, sizeof(line));
@@ -207,7 +206,7 @@ public:
     {
         char path[PATH_MAX];
         uint32_t line, col;
-        if (sscanf(str.constData(), "%[^':']:%d:%d", path, &line, &col) != 3)
+        if (sscanf(str.constData(), "%[^':']:%u:%u", path, &line, &col) != 3)
             return Location();
 
         const Path resolved = Path::resolved(path, Path::RealPath, pwd);
@@ -260,7 +259,9 @@ public:
         sLastId = std::max(sLastId, fileId);
     }
 private:
+#ifndef RTAGS_SINGLE_THREAD
     static std::mutex sMutex;
+#endif
     static Hash<Path, uint32_t> sPathsToIds;
     static Hash<uint32_t, Path> sIdsToPaths;
     static uint32_t sLastId;
@@ -275,7 +276,7 @@ private:
     static const uint64_t COLUMN_MASK;
 };
 
-RCT_FLAGS(Location::KeyFlag);
+RCT_FLAGS(Location::ToStringFlag);
 
 template <> struct FixedSize<Location>
 {
@@ -288,6 +289,30 @@ template <> inline Serializer &operator<<(Serializer &s, const Location &t)
     return s;
 }
 
+inline bool operator==(const Location &loc, const String &str)
+{
+    const Location fromPath = Location::fromPathLineAndColumn(str);
+    return loc == fromPath;
+}
+
+inline bool operator!=(const Location &loc, const String &str)
+{
+    const Location fromPath = Location::fromPathLineAndColumn(str);
+    return loc != fromPath;
+}
+
+inline bool operator==(const String &str, const Location &loc)
+{
+    const Location fromPath = Location::fromPathLineAndColumn(str);
+    return loc == fromPath;
+}
+
+inline bool operator!=(const String &str, const Location &loc)
+{
+    const Location fromPath = Location::fromPathLineAndColumn(str);
+    return loc != fromPath;
+}
+
 template <> inline Deserializer &operator>>(Deserializer &s, Location &t)
 {
     s.read(reinterpret_cast<char*>(&t), sizeof(uint64_t));
@@ -296,7 +321,7 @@ template <> inline Deserializer &operator>>(Deserializer &s, Location &t)
 
 static inline Log operator<<(Log dbg, const Location &loc)
 {
-    dbg << loc.key();
+    dbg << loc.toString();
     return dbg;
 }
 

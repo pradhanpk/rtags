@@ -16,9 +16,9 @@ along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 #ifndef RTagsLogOutput_h
 #define RTagsLogOutput_h
 
-#include <rct/String.h>
-#include <rct/Log.h>
-#include <rct/Connection.h>
+#include "rct/Connection.h"
+#include "rct/Log.h"
+#include "rct/String.h"
 
 class RTagsLogOutput : public LogOutput
 {
@@ -33,7 +33,7 @@ public:
 
     enum Flag {
         None = 0x0,
-        ElispList = 0x1
+        Elisp = 0x1
     };
 
     virtual unsigned int flags() const override { return mFlags; }

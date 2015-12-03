@@ -14,12 +14,15 @@ You should have received a copy of the GNU General Public License
 along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
 #include "StatusJob.h"
-#include "RTags.h"
-#include "Server.h"
+
 #include <clang-c/Index.h>
-#include "Project.h"
+
 #include "CompilerManager.h"
 #include "JobScheduler.h"
+#include "Project.h"
+#include "rct/Process.h"
+#include "RTags.h"
+#include "Server.h"
 
 const char *StatusJob::delimiter = "*********************************";
 StatusJob::StatusJob(const std::shared_ptr<QueryMessage> &q, const std::shared_ptr<Project> &project)
@@ -33,7 +36,7 @@ int StatusJob::execute()
         return !strncasecmp(query.constData(), name, query.size());
     };
     bool matched = false;
-    const char *alternatives = "fileids|watchedpaths|dependencies|cursors|symbols|targets|symbolnames|sources|jobs|info|compilers|declarations|headererrors";
+    const char *alternatives = "fileids|watchedpaths|dependencies|cursors|symbols|targets|symbolnames|sources|jobs|info|compilers|headererrors|memory";
 
     if (match("fileids")) {
         matched = true;
@@ -101,11 +104,22 @@ int StatusJob::execute()
         if (!write(delimiter) || !write("watchedpaths") || !write(delimiter))
             return 1;
         Hash<Path, Flags<Project::WatchMode> > watched = proj->watchedPaths();
-        if (!write("Indexer"))
-            return 1;
+        auto watchModeToString = [](Flags<Project::WatchMode> mode) {
+            List<String> ret;
+            if (mode & Project::Watch_FileManager)
+                ret << "filemanager";
+            if (mode & Project::Watch_SourceFile)
+                ret << "source";
+            if (mode & Project::Watch_Dependency)
+                ret << "dependency";
+            if (mode & Project::Watch_CompilationDatabase)
+                ret << "compilationdatabase";
+            return String::join(ret, '|');
+        };
         for (const auto &it : watched) {
-            if (!write<256>("  %s (%s)", it.first.constData(), it.second.toString().constData()))
+            if (!write<256>("  %s (%s)", it.first.constData(), watchModeToString(it.second).constData())) {
                 return 1;
+            }
         }
     }
 
@@ -159,11 +173,11 @@ int StatusJob::execute()
                 const String usr = targets->keyAt(i);
                 write<128>("  %s", usr.constData());
                 for (const auto &t : proj->findByUsr(usr, dep.first, Project::ArgDependsOn)) {
-                    write<1024>("      %s\t%s", t.location.key(keyFlags()).constData(),
+                    write<1024>("      %s\t%s", t.location.toString(locationToStringFlags()).constData(),
                                 t.kindSpelling().constData());
                 }
                 for (const auto &location : targets->valueAt(i)) {
-                    write<1024>("    %s", location.key(keyFlags()).constData());
+                    write<1024>("    %s", location.toString(locationToStringFlags()).constData());
                 }
                 write("------------------------");
                 if (isAborted())
@@ -185,7 +199,7 @@ int StatusJob::execute()
             for (int i=0; i<count; ++i) {
                 write<128>("  %s", symNames->keyAt(i).constData());
                 for (const Location &loc : symNames->valueAt(i)) {
-                    write<1024>("    %s", loc.key().constData());
+                    write<1024>("    %s", loc.toString().constData());
                 }
                 write("------------------------");
                 if (isAborted())
@@ -233,15 +247,11 @@ int StatusJob::execute()
         }
     }
 
-    if (query.isEmpty() || match("declarations")) {
-        for (const auto &it : proj->declarations()) {
-            write(it.first);
-            for (uint32_t file : it.second) {
-                write<128>("  %s", Location::path(file).constData());
-            }
-        }
+    if (query.isEmpty() || match("memory")) {
+        write(proj->estimateMemory());
         matched = true;
     }
+
 
     if (!matched) {
         write<256>("rc -s %s", alternatives);

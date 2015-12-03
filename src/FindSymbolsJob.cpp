@@ -14,14 +14,16 @@ You should have received a copy of the GNU General Public License
 along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
 #include "FindSymbolsJob.h"
-#include "Server.h"
-#include <rct/Log.h>
-#include "RTagsClang.h"
+
 #include "Project.h"
+#include "QueryMessage.h"
+#include "rct/Log.h"
+#include "RTags.h"
+#include "Server.h"
 
 static inline Flags<QueryJob::JobFlag> jobFlags(Flags<QueryMessage::Flag> queryFlags)
 {
-    return (queryFlags & QueryMessage::ElispList
+    return (queryFlags & QueryMessage::Elisp
             ? QueryJob::QuoteOutput|QueryJob::QuietJob
             : Flags<QueryJob::JobFlag>(QueryJob::QuietJob));
 }
@@ -36,8 +38,18 @@ int FindSymbolsJob::execute()
     int ret = 2;
     if (std::shared_ptr<Project> proj = project()) {
         Set<Symbol> symbols;
-        const uint32_t filter = fileFilter();
-        auto inserter = [proj, this, &symbols](Project::SymbolMatchType type, const String &symbolName, const Set<Location> &locations) {
+        Location filter;
+        const uint32_t filteredFile = fileFilter();
+        if (filteredFile)
+            filter = Location(filteredFile, 0, 0);
+        auto inserter = [proj, this, &symbols, &filter, filteredFile](Project::SymbolMatchType type,
+                                                                      const String &symbolName,
+                                                                      const Set<Location> &locations) {
+            if (filter.fileId()) {
+                auto it = locations.lower_bound(filter);
+                if (it == locations.end() || it->fileId() != filteredFile)
+                    return;
+            }
             if (type == Project::StartsWith) {
                 const int paren = symbolName.indexOf('(');
                 if (paren == -1 || paren != string.size() || RTags::isFunctionVariable(symbolName))
@@ -52,7 +64,7 @@ int FindSymbolsJob::execute()
         proj->findSymbols(string, inserter, queryFlags());
         if (!symbols.isEmpty()) {
             const List<RTags::SortedSymbol> sorted = proj->sort(symbols, queryFlags());
-            const Flags<WriteFlag> writeFlags = filter ? NoWriteFlags : Unfiltered;
+            const Flags<WriteFlag> writeFlags = fileFilter() ? Unfiltered : NoWriteFlags;
             const int count = sorted.size();
             ret = count ? 0 : 1;
             for (int i=0; i<count; ++i) {

@@ -16,21 +16,13 @@ along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 #ifndef Server_h
 #define Server_h
 
-#include "FileManager.h"
-#include "RTagsClang.h"
-#include "RTags.h"
-#include "Source.h"
-#include "IndexerJob.h"
-#include "Match.h"
 #include "IndexMessage.h"
-#include <rct/Connection.h>
-#include <rct/FileSystemWatcher.h>
-#include <rct/List.h>
-#include <rct/Hash.h>
-#include <rct/String.h>
-#include <rct/Timer.h>
-#include <rct/SocketServer.h>
-#include <rct/Flags.h>
+#include "rct/Flags.h"
+#include "rct/Hash.h"
+#include "rct/List.h"
+#include "rct/SocketServer.h"
+#include "rct/String.h"
+#include "Source.h"
 
 class CompletionThread;
 class Connection;
@@ -51,29 +43,33 @@ public:
     ~Server();
     static Server *instance() { return sInstance; }
     enum Option {
-        NoOptions = 0x00000,
-        ClearProjects = 0x00001,
-        Wall = 0x00002,
-        IgnorePrintfFixits = 0x00004,
-        NoUnlimitedErrors = 0x00008,
-        SpellChecking = 0x00010,
-        DisallowMultipleSources = 0x00020,
-        NoStartupCurrentProject = 0x00040,
-        WatchSystemPaths = 0x00080,
-        NoFileManagerWatch = 0x00100,
-        NoFileSystemWatch = 0x00200,
-        NoNoUnknownWarningsOption = 0x00400,
-        SuspendRPOnCrash = 0x00800,
-        SeparateDebugAndRelease = 0x01000,
-        AllowPedantic = 0x02000,
-        StartSuspended = 0x04000,
-        EnableCompilerManager = 0x08000,
-        EnableNDEBUG = 0x10000,
-        Progress = 0x20000,
-        Weverything = 0x40000,
-        NoComments = 0x80000,
-        Launchd = 0x100000,     /* Only valid for Darwin... but you're
-                                 * not out of bits yet. */
+        NoOptions = 0x000000,
+        ClearProjects = 0x000001,
+        Wall = 0x000002,
+        IgnorePrintfFixits = 0x000004,
+        NoUnlimitedErrors = 0x000008,
+        SpellChecking = 0x000010,
+        DisallowMultipleSources = 0x000020,
+        NoStartupCurrentProject = 0x000040,
+        WatchSystemPaths = 0x000080,
+        NoFileManagerWatch = 0x000100,
+        NoFileSystemWatch = 0x000200,
+        NoNoUnknownWarningsOption = 0x000400,
+        SuspendRPOnCrash = 0x000800,
+        SeparateDebugAndRelease = 0x001000,
+        AllowPedantic = 0x002000,
+        StartSuspended = 0x004000,
+        EnableCompilerManager = 0x008000,
+        EnableNDEBUG = 0x010000,
+        Progress = 0x020000,
+        Weverything = 0x040000,
+        NoComments = 0x080000,
+        Launchd = 0x0100000,     /* Only valid for Darwin... but you're not out of bits yet. */
+        RPLogToSyslog = 0x0200000,
+        CompletionsNoFilter = 0x0400000,
+        WatchSourcesOnly = 0x0800000,
+        NoFileLock = 0x1000000,
+        PCHEnabled = 0x2000000
     };
     struct Options {
         Options()
@@ -81,7 +77,7 @@ public:
               rpVisitFileTimeout(0), rpIndexDataMessageTimeout(0), rpConnectTimeout(0),
               rpConnectAttempts(0), rpNiceValue(0), threadStackSize(0), maxCrashCount(0),
               completionCacheSize(0), testTimeout(60 * 1000 * 5),
-              maxFileMapScopeCacheSize(512)
+              maxFileMapScopeCacheSize(512), tcpPort(0)
         {
         }
 
@@ -90,6 +86,7 @@ public:
         int jobCount, headerErrorJobCount, rpVisitFileTimeout, rpIndexDataMessageTimeout,
             rpConnectTimeout, rpConnectAttempts, rpNiceValue, threadStackSize, maxCrashCount,
             completionCacheSize, testTimeout, maxFileMapScopeCacheSize;
+        uint16_t tcpPort;
         List<String> defaultArguments, excludeFilters;
         Set<String> blockedArguments;
         List<Source::Include> includePaths;
@@ -97,8 +94,7 @@ public:
         List<Path> tests;
         Set<Path> ignoredCompilers;
         List<std::regex> extraCompilers;
-
-        inline bool flag(enum Option o) const { return 0 != (options & o); }
+        List<String> debugLocations;
     };
     bool init(const Options &options);
     bool runTests();
@@ -113,6 +109,8 @@ public:
     const Set<uint32_t> &activeBuffers() const { return mActiveBuffers; }
     bool isActiveBuffer(uint32_t fileId) const { return mActiveBuffers.contains(fileId); }
     int exitCode() const { return mExitCode; }
+    std::shared_ptr<Project> currentProject() const { return mCurrentProject.lock(); }
+    void onNewMessage(const std::shared_ptr<Message> &message, const std::shared_ptr<Connection> &conn);
 private:
     String guessArguments(const String &args, const Path &pwd, const Path &projectRootOverride);
     bool saveFileIds();
@@ -121,10 +119,10 @@ private:
                const Path &pwd,
                const List<Path> &pathEnvironment,
                const Path &projectRootOverride,
-               Flags<IndexMessage::Flag> = Flags<IndexMessage::Flag>());
+               Flags<IndexMessage::Flag> = Flags<IndexMessage::Flag>(),
+               std::shared_ptr<Project> *projectPtr = 0);
     void onNewConnection(SocketServer *server);
     void setCurrentProject(const std::shared_ptr<Project> &project);
-    void onNewMessage(const std::shared_ptr<Message> &message, const std::shared_ptr<Connection> &conn);
     void clearProjects();
     void handleIndexMessage(const std::shared_ptr<IndexMessage> &message, const std::shared_ptr<Connection> &conn);
     void handleIndexDataMessage(const std::shared_ptr<IndexDataMessage> &message, const std::shared_ptr<Connection> &conn);
@@ -141,6 +139,7 @@ private:
     void dependencies(const std::shared_ptr<QueryMessage> &query, const std::shared_ptr<Connection> &conn);
     void dumpFile(const std::shared_ptr<QueryMessage> &query, const std::shared_ptr<Connection> &conn);
     void dumpFileMaps(const std::shared_ptr<QueryMessage> &query, const std::shared_ptr<Connection> &conn);
+    void diagnose(const std::shared_ptr<QueryMessage> &query, const std::shared_ptr<Connection> &conn);
     void generateTest(const std::shared_ptr<QueryMessage> &query, const std::shared_ptr<Connection> &conn);
     void findFile(const std::shared_ptr<QueryMessage> &query, const std::shared_ptr<Connection> &conn);
     void findSymbols(const std::shared_ptr<QueryMessage> &query, const std::shared_ptr<Connection> &conn);
@@ -167,16 +166,16 @@ private:
     void suspend(const std::shared_ptr<QueryMessage> &query, const std::shared_ptr<Connection> &conn);
     void setBuffers(const std::shared_ptr<QueryMessage> &query, const std::shared_ptr<Connection> &conn);
     void classHierarchy(const std::shared_ptr<QueryMessage> &query, const std::shared_ptr<Connection> &conn);
+    void debugLocations(const std::shared_ptr<QueryMessage> &query, const std::shared_ptr<Connection> &conn);
 
     std::shared_ptr<Project> projectForQuery(const std::shared_ptr<QueryMessage> &queryMessage);
-    std::shared_ptr<Project> currentProject() const { return mCurrentProject.lock(); }
     std::shared_ptr<Project> addProject(const Path &path);
 
     bool hasServer() const;
     void onHttpClientReadyRead(const SocketClient::SharedPtr &socket);
     void connectToServer();
     void startJobs();
-    bool initUnixServer();
+    bool initServers();
     void removeSocketFile();
 
     typedef Hash<Path, std::shared_ptr<Project> > ProjectsMap;
@@ -186,7 +185,7 @@ private:
     static Server *sInstance;
     Options mOptions;
     bool mSuspended;
-    SocketServer::SharedPtr mUnixServer;
+    SocketServer::SharedPtr mUnixServer, mTcpServer;
     List<Path> mPathEnvironment;
 
     int mExitCode;

@@ -14,16 +14,19 @@
    along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
 #include "ListSymbolsJob.h"
-#include "Server.h"
+
 #include "Project.h"
-#include <rct/Log.h>
+#include "QueryMessage.h"
+#include "rct/List.h"
+#include "rct/Log.h"
 #include "RTags.h"
+#include "Server.h"
 
 const Flags<QueryJob::JobFlag> defaultFlags = (QueryJob::WriteUnfiltered | QueryJob::QuietJob);
 const Flags<QueryJob::JobFlag> elispFlags = (defaultFlags | QueryJob::QuoteOutput);
 
 ListSymbolsJob::ListSymbolsJob(const std::shared_ptr<QueryMessage> &query, const std::shared_ptr<Project> &proj)
-    : QueryJob(query, proj, query->flags() & QueryMessage::ElispList ? elispFlags : defaultFlags),
+    : QueryJob(query, proj, query->flags() & QueryMessage::Elisp ? elispFlags : defaultFlags),
       string(query->query())
 {
 }
@@ -37,7 +40,20 @@ int ListSymbolsJob::execute()
             && (string.contains('*') || string.contains('?')) && !string.endsWith('*')) {
             string += '*';
         }
-        const List<String> paths = pathFilters();
+        List<QueryMessage::PathFilter> filters = pathFilters();
+        List<Path> paths;
+        for (const auto &filter : filters) {
+            if (filter.mode == QueryMessage::PathFilter::Self) {
+                paths.append(filter.pattern);
+                if (!paths.last().isFile()) {
+                    paths.clear();
+                    break;
+                }
+            } else {
+                paths.clear();
+                break;
+            }
+        }
         if (!paths.isEmpty()) {
             out = listSymbolsWithPathFilter(proj, paths);
         } else {
@@ -45,9 +61,7 @@ int ListSymbolsJob::execute()
         }
     }
 
-    const bool elispList = queryFlags() & QueryMessage::ElispList;
-
-    if (elispList) {
+    if (queryFlags() & QueryMessage::Elisp) {
         write("(list", IgnoreMax | DontQuote);
         for (Set<String>::const_iterator it = out.begin(); it != out.end(); ++it) {
             write(*it);
@@ -68,7 +82,7 @@ int ListSymbolsJob::execute()
     return out.isEmpty() ? 1 : 0;
 }
 
-Set<String> ListSymbolsJob::listSymbolsWithPathFilter(const std::shared_ptr<Project> &project, const List<String> &paths) const
+Set<String> ListSymbolsJob::listSymbolsWithPathFilter(const std::shared_ptr<Project> &project, const List<Path> &paths) const
 {
     Set<String> out;
     const bool imenu = queryFlags() & QueryMessage::IMenu;
@@ -78,10 +92,6 @@ Set<String> ListSymbolsJob::listSymbolsWithPathFilter(const std::shared_ptr<Proj
     const String::CaseSensitivity cs = caseInsensitive ? String::CaseInsensitive : String::CaseSensitive;
     for (int i=0; i<paths.size(); ++i) {
         const Path file = paths.at(i);
-        if (!file.isFile()) {
-            error() << "Invalid path filter for --imenu" << file;
-            continue;
-        }
         const uint32_t fileId = Location::fileId(file);
         if (!fileId)
             continue;

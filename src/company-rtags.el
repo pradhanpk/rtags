@@ -79,8 +79,10 @@ and `c-electric-colon', for automatic completion right after \">\" and
               (t nil))))))
 
 (defun company-rtags--valid-candidate (prefix cand)
-  (and (or (not prefix)
+  (and (> (length (car cand)) 0)
+       (or (not prefix)
            (string-prefix-p prefix (car cand)))
+       (not (string= (nth 2 cand) "NotImplemented"))
        (let ((prefix-type (company-rtags--prefix-type)))
          (or (not prefix-type)
              (eq prefix-type 'company-rtags-colons)
@@ -90,8 +92,9 @@ and `c-electric-colon', for automatic completion right after \">\" and
   (let* ((text (copy-sequence (nth 0 candidate)))
          (meta (nth 1 candidate))
          (metalength (length meta)))
-    (if (> metalength maxwidth)
-        (setq meta (concat (substring meta 0 (- maxwidth 5)) "<...>)")))
+    (put-text-property 0 1 'meta-insert meta text)
+    (when (> metalength maxwidth)
+      (setq meta (concat (substring meta 0 (- maxwidth 5)) "<...>)")))
     (put-text-property 0 1 'meta meta text)
     text))
 
@@ -118,11 +121,11 @@ and `c-electric-colon', for automatic completion right after \">\" and
                 (setq candidates (cdr candidates)))
               (reverse results)))))))
 
-(defun company-rtags--meta (candidate)
-  (get-text-property 0 'meta candidate))
+(defun company-rtags--meta (candidate insert)
+  (get-text-property 0 (if insert 'meta-insert 'meta) candidate))
 
-(defun company-rtags--annotation (candidate)
-  (let ((meta (company-rtags--meta candidate)))
+(defun company-rtags--annotation (candidate insert)
+  (let ((meta (company-rtags--meta candidate insert)))
     (cond
      ((null meta) nil)
      ((string-match "\\((.*)\\)" meta)
@@ -159,7 +162,7 @@ and `c-electric-colon', for automatic completion right after \">\" and
   (interactive (list 'interactive))
   (setq rtags-company-last-completion-prefix arg)
   (case command
-    (init (rtags-diagnostics))
+    (init (or rtags-autostart-diagnostics (rtags-diagnostics)))
     (interactive (company-begin-backend 'company-rtags))
     (prefix (and (memq major-mode company-rtags-modes)
                  buffer-file-name
@@ -172,10 +175,10 @@ and `c-electric-colon', for automatic completion right after \">\" and
                (lambda (cb)
                  (rtags-company-update-completions cb)))
        (company-rtags--candidates arg)))
-    (meta (company-rtags--meta arg))
+    (meta (company-rtags--meta arg nil))
     (sorted t)
-    (annotation (company-rtags--annotation arg))
-    (post-completion (let ((anno (company-rtags--annotation arg)))
+    (annotation (company-rtags--annotation arg nil))
+    (post-completion (let ((anno (company-rtags--annotation arg t)))
                        (when (and company-rtags-insert-arguments anno)
                          (insert anno)
                          (company-template-c-like-templatify anno))))))

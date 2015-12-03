@@ -14,9 +14,10 @@ You should have received a copy of the GNU General Public License
 along with RTags.  If not, see <http://www.gnu.org/licenses/>. */
 
 #include "Preprocessor.h"
-#include <rct/Connection.h>
-#include <rct/Process.h>
-#include <rct/Log.h>
+
+#include "rct/Connection.h"
+#include "rct/Log.h"
+#include "rct/Process.h"
 #include "RTags.h"
 
 Preprocessor::Preprocessor(const Source &source, const std::shared_ptr<Connection> &connection)
@@ -27,6 +28,7 @@ Preprocessor::Preprocessor(const Source &source, const std::shared_ptr<Connectio
 }
 
 const Flags<Source::CommandLineFlag> SourceFlags = (Source::IncludeSourceFile
+                                                    | Source::IncludeExtraCompiler
                                                     | Source::ExcludeDefaultArguments
                                                     | Source::ExcludeDefaultIncludePaths
                                                     | Source::ExcludeDefaultDefines

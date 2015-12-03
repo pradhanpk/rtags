@@ -25,22 +25,35 @@ Roberto Raggi on whose C++ parser we intended to base this project but
 he assured us clang was the way to go. The name stuck though.
 
 * TLDR Quickstart
-  Build RTags, start rdm, index some files, (rtags-follow-symbol-at-point)
+Build RTags
 #+BEGIN_SRC
-$ cd rtags
-$ cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=1
-$ make
-$ rdm &
-$ rc -J .
-$ # wait for rdm to be silent
-$ emacs src/rdm.cpp
-(require 'rtags)
-# Go to /Users/abakken/dev/rtags-master/src/rdm.cpp:30:34     if (Server *server = Server::instance())
-#                                                                                         /|\
-#                                                                                          |
-(rtags-follow-symbol-at-point)
-# Your location is now on the definition of Server::instance()
+git clone --recursive https://github.com/Andersbakken/rtags.git
+cd rtags
+cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=1 .
+make
 #+END_SRC
+Start the RTags daemon (rdm)
+#+BEGIN_SRC
+./bin/rdm &
+#+END_SRC
+Index the RTags project, and wait until rdm is silent
+#+BEGIN_SRC
+./bin/rc -J .
+#+END_SRC
+Open source file in emacs
+#+END_SRC
+#+BEGIN_SRC
+emacs +39:34 src/rdm.cpp
+#+END_SRC
+Load rtags.el
+#+BEGIN_SRC
+M-: (load-file "rtags.el") RET
+#+END_SRC
+Call rtags-find-symbol-at-point
+#+BEGIN_SRC
+M-x rtags-find-symbol-at-point RET
+#+END_SRC
+Your location is now on the definition of Server::instance()
 
 * Installing RTags
 ** Prerequisites
@@ -60,6 +73,22 @@ There are a few prerequisites you need to have in order to build RTags
    version we test with is 24.3.1. There's no particular effort made
    to support older versions but patches that make it work are
    welcome.
+
+*** Optional
+RTags comes with bash completion support, if you want the bash
+completion files to be installed, you either have to make sure that
+*pkg-config* and *bash-completion* package is installed, or you can
+manually force the installation, by setting the variable
+FORCE_BASH_COMPLETION_INSTALLATION to TRUE or ON.
+
+The default installation path is
+"CMAKE_INSTALL_PREFIX/share/bash-completion/completions".
+Additionally, you can adjust the BASH_COMPLETION_COMPLATIONSDIR
+variable. However, if the bash completions files are not installed
+in the default completion path, i.e. /usr/share/bash-completion/completions
+on GNU/Linux, you have to make sure the *rtags* bash completion file gets
+sourced, to get completion support.
+
 
 ** C++11 on OS X
 
@@ -120,23 +149,24 @@ with an ncurses UI) instead of =cmake=.
   interrogate it for the information. You can tell rtags which
   llvm-config to use like this:
 #+BEGIN_SRC
-  LLVM_CONFIG=/path/to/llvm-config cmake .
+  LIBCLANG_LLVM_CONFIG_EXECUTABLE=/path/to/llvm-config cmake .
 #+END_SRC
   or
 #+BEGIN_SRC
-  cmake -DLLVM_CONFIG=/path/to/llvm-config .
+  cmake -DLIBCLANG_LLVM_CONFIG_EXECUTABLE=/path/to/llvm-config .
 #+END_SRC
-  If you don't we will look for variations of the llvm-config
-  executable name in your $PATH.
+  If you don't we will look for variations of the llvm-config executable name
+  in your $PATH. If llvm is installed at a different place, you could set the
+  cmake variable CMAKE_PREFIX_PATH to the install prefix path of llvm.
 
   The three things we need are:
-  1. CLANG_CXXFLAGS
+  1. LIBCLANG_CXXFLAGS
      Usually something like this:
 #+BEGIN_SRC
      $ llvm-config --cxxflags
      -I/usr/local/Cellar/llvm36/3.6.0/lib/llvm-3.6/include  -DNDEBUG -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -O3  -std=c++11 -fvisibility-inlines-hidden -fno-exceptions -fno-common -Woverloaded-virtual -Wcast-qual
 #+END_SRC
-  2. CLANG_LIBDIR
+  2. LIBCLANG_LIBDIR
      Usually something like this:
 #+BEGIN_SRC
      $ llvm-config --libdir
@@ -144,22 +174,22 @@ with an ncurses UI) instead of =cmake=.
 #+END_SRC
      We need this to locate clang's system headers and we will assume
      that they are located in:
-     ${CLANG_LIBDIR}/clang/CLANG_VERSION_STRING/include (/usr/local/Cellar/llvm36/3.6.0/lib/llvm-3.6/lib/clang/3.6.0/include)
+     ${LIBCLANG_LIBDIR}/clang/CLANG_VERSION_STRING/include (/usr/local/Cellar/llvm36/3.6.0/lib/llvm-3.6/lib/clang/3.6.0/include)
      There should be headers like stdarg.h and limits.h in this
      directory.
 
-  2. CLANG_LIBS
+  2. LIBCLANG_LIBRARIES
      Usually something like this:
 #+BEGIN_SRC
      -L/usr/local/Cellar/llvm36/3.6.0/lib/llvm-3.6/lib -lclang
 #+END_SRC
      Unless specified we will take try to find these libraries using
      cmake's find_library features and/or assuming that they there
-     will be a libclang.(so|dylib) in ${CLANG_LIBDIR}
+     will be a libclang.(so|dylib) in ${LIBCLANG_LIBDIR}
 
-Like with LLVM_CONFIG these variables can be override as a cmake
-variable (cmake -DCLANG_LIBDIR=...) or an environment variable
-(CLANG_LIBDIR=... cmake)
+Like with LIBCLANG_LLVM_CONFIG_EXECUTABLE these variables can be override as a cmake
+variable (cmake -DLIBCLANG_LIBDIR=...) or an environment variable
+(LIBCLANG_LIBDIR=... cmake)
 
 RTags uses C++11 features and requires a relatively new
 compiler. Gcc version >= 4.8 or clang >= 3.2 works.
@@ -633,6 +663,22 @@ some of these may be outdated:
 [[http://www.youtube.com/watch?v=p6JHriYmVuY&list=PLAL6K6Ycnt4IwjIjWcYV9bFgcTG_4T1Y_&index=4][Rename symbol]]
 
 [[http://www.youtube.com/watch?v=9CsoJTs58q8&list=PLAL6K6Ycnt4IwjIjWcYV9bFgcTG_4T1Y_&index=8][Enums and cursor info]]
+
+* Debugging RTags
+  If you find that rp is crashing (leading to output like this: "job
+  crashed 191 9698036154370 0x331e7e30"). You should be able to do the
+  following:
+
+#+BEGIN_SRC
+$ rdm --suspend-rp-on-crash
+#+END_SRC
+
+When rp crashes the rp process will stay alive, enabling you to debug
+it with something like this:
+
+#+BEGIN_SRC
+gdb -p `pidof rp`
+#+END_SRC
 
 * Support for other editors
 There are several other projects integrating RTags with other editors.
